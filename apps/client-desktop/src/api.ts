@@ -2,6 +2,8 @@ import {
   normalizeServerUrl,
   type ClientProfile,
   type GuestDeviceBinding,
+  type GuestDeviceCommand,
+  type HandshakeStatus,
 } from '@sandrobina/shared';
 
 export class ClientApiError extends Error {
@@ -14,6 +16,11 @@ export class ClientApiError extends Error {
 }
 
 export type StreamConnectionState = 'connected' | 'connecting' | 'disconnected';
+
+export interface IncomingDeviceCommandEvent {
+  deviceId: string;
+  command: GuestDeviceCommand;
+}
 
 export class ClientApiClient {
   constructor(
@@ -146,6 +153,55 @@ export class ClientApiClient {
     });
   }
 
+  requestHandshake(payload: {
+    deviceId: string;
+    deviceName: string;
+    hostname: string;
+    os: string;
+    sshUser: string;
+    sshPort: number;
+    primaryIp: string;
+    fallbackIp?: string;
+    zerotierIp?: string;
+    zerotierNodeId?: string;
+    zerotierNetworkId?: string;
+    targetAdminNodeId: string;
+    sshAuthorized?: boolean;
+  }) {
+    return this.request<{
+      ok: boolean;
+      autoApproved: boolean;
+      handshakeStatus: HandshakeStatus;
+      device: GuestDeviceBinding;
+      devices: GuestDeviceBinding[];
+    }>('/api/client/devices/handshake', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  ackDeviceCommand(
+    deviceId: string,
+    payload: {
+      commandId: string;
+      ok: boolean;
+      connected?: boolean;
+      sshAuthorized?: boolean;
+      handshakeStatus?: HandshakeStatus;
+      hostAdminNodeId?: string;
+      hostAdminName?: string;
+    },
+  ) {
+    return this.request<{
+      ok: boolean;
+      device: GuestDeviceBinding;
+      devices: GuestDeviceBinding[];
+    }>(`/api/client/devices/${encodeURIComponent(deviceId)}/ack-command`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   disconnectDevice(deviceId: string) {
     return this.request<{
       ok: boolean;
@@ -170,6 +226,7 @@ export class ClientApiClient {
     onProfile: (profile: ClientProfile) => void,
     onStatusChange: (status: StreamConnectionState) => void,
     onUnauthorized: (reason?: string) => void,
+    onCommand?: (event: IncomingDeviceCommandEvent) => void,
   ): () => void {
     const base = normalizeServerUrl(this.serverUrl);
     if (!base || !this.token) {
@@ -201,6 +258,18 @@ export class ClientApiClient {
           onProfile(parsed);
         } catch {
           // ignore malformed event payload
+        }
+      });
+
+      source.addEventListener('command', (event) => {
+        if (!onCommand) return;
+        try {
+          const parsed = JSON.parse((event as MessageEvent).data) as IncomingDeviceCommandEvent;
+          if (parsed && parsed.deviceId && parsed.command) {
+            onCommand(parsed);
+          }
+        } catch {
+          // ignore malformed command payload
         }
       });
 

@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     ipcRenderer.invoke('guest:status', hostPublicKey),
   connectGuestHost: (hostBinding: unknown, deviceName?: string) =>
     ipcRenderer.invoke('guest:connect', hostBinding, deviceName),
+  connectGuestAdminNode: (adminNode: unknown, deviceName?: string) =>
+    ipcRenderer.invoke('guest:connect-node', adminNode, deviceName),
   disconnectGuestHost: (hostPublicKey?: string) =>
     ipcRenderer.invoke('guest:disconnect', hostPublicKey),
 });

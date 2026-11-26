@@ -807,4 +807,200 @@ describe('Sandrobina API Gateway', () => {
     assert.equal(allDevs.find((d) => d.id === 'dev-bob-mac')?.userId, bobId);
     assert.equal(allDevs.find((d) => d.id === 'dev-bob-win')?.accountUsername, 'carol');
   });
+
+  test('admin node mesh, targeted client handshake approval, switch-host and force-disconnect commands', async () => {
+    const loginRes = await fetch(`${gwServer.url}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'new-password-456' }),
+    });
+    const { token: adminToken } = (await loginRes.json()) as { token: string };
+    const adminHeaders = { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' };
+
+    // Two machines logged into the single admin account register as admin nodes
+    for (const [id, name, ip] of [
+      ['node-win-a', 'WIN-DESKTOP', '192.168.1.10'],
+      ['node-mac-b', 'Admin-Mac', '192.168.1.11'],
+    ]) {
+      const r = await fetch(`${gwServer.url}/api/admin/nodes/register`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          id,
+          nodeName: name,
+          hostname: name,
+          os: id.includes('win') ? 'Windows' : 'macOS',
+          sshUser: 'admin',
+          primaryIp: ip,
+          publicKey: `ssh-ed25519 AAAAC3Nza${id.replace(/\W/g, '')}Key smac-admin`,
+        }),
+      });
+      assert.equal(r.status, 200);
+    }
+    const nodesRes = await fetch(`${gwServer.url}/api/admin/nodes`, { headers: adminHeaders });
+    const nodes = ((await nodesRes.json()) as { nodes: Array<{ id: string; online: boolean }> }).nodes;
+    assert.equal(nodes.length, 2);
+    assert.ok(nodes.every((n) => n.online));
+
+    // Accounts: dave (manual approval), erin (trusted auto-approve)
+    const mkUser = async (username: string, extra: Record<string, unknown> = {}) => {
+      const r = await fetch(`${gwServer.url}/api/admin/users`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ username, displayName: username, password: `${username}-pass`, ...extra }),
+      });
+      assert.equal(r.status, 201);
+      return ((await r.json()) as { user: { id: number } }).user.id;
+    };
+    await mkUser('dave');
+    await mkUser('erin', { autoApproveHandshake: true });
+    const clientLogin = async (username: string) => {
+      const r = await fetch(`${gwServer.url}/api/client/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password: `${username}-pass` }),
+      });
+      assert.equal(r.status, 200);
+      const body = (await r.json()) as { token: string; profile: { adminNodes?: unknown[] } };
+      assert.equal(body.profile.adminNodes?.length, 2);
+      return { Authorization: `Bearer ${body.token}`, 'Content-Type': 'application/json' };
+    };
+    const daveH = await clientLogin('dave');
+    const erinH = await clientLogin('erin');
+
+    // dave handshakes with node-win-a -> pending
+    const hs = await fetch(`${gwServer.url}/api/client/devices/handshake`, {
+      method: 'POST',
+      headers: daveH,
+      body: JSON.stringify({
+        targetAdminNodeId: 'node-win-a',
+        id: 'dev-dave-1',
+        deviceName: 'Dave-Laptop',
+        os: 'Windows',
+        sshUser: 'dave',
+        primaryIp: '192.168.1.50',
+      }),
+    });
+    assert.equal(hs.status, 200);
+    const hsDev = ((await hs.json()) as {
+      device: { handshakeStatus: string; connected: boolean; hostAdminNodeId: string; hostAdminName: string };
+    }).device;
+    assert.equal(hsDev.handshakeStatus, 'pending');
+    assert.equal(hsDev.connected, false);
+    assert.equal(hsDev.hostAdminNodeId, 'node-win-a');
+    assert.equal(hsDev.hostAdminName, 'WIN-DESKTOP');
+
+    // Unknown target admin node is rejected
+    const badTarget = await fetch(`${gwServer.url}/api/client/devices/handshake`, {
+      method: 'POST',
+      headers: daveH,
+      body: JSON.stringify({ targetAdminNodeId: 'nope-node', id: 'dev-dave-x' }),
+    });
+    assert.equal(badTarget.status, 404);
+
+    // Wrong admin node cannot approve; the direct host can
+    const wrongApprove = await fetch(`${gwServer.url}/api/admin/devices/dev-dave-1/approve`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ adminNodeId: 'node-mac-b' }),
+    });
+    assert.equal(wrongApprove.status, 403);
+    const okApprove = await fetch(`${gwServer.url}/api/admin/devices/dev-dave-1/approve`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ adminNodeId: 'node-win-a' }),
+    });
+    assert.equal(okApprove.status, 200);
+    const approved = ((await okApprove.json()) as { device: { handshakeStatus: string; connected: boolean } }).device;
+    assert.equal(approved.handshakeStatus, 'connected');
+    assert.equal(approved.connected, true);
+
+    // Trusted account auto-approves instantly
+    const erinHs = await fetch(`${gwServer.url}/api/client/devices/handshake`, {
+      method: 'POST',
+      headers: erinH,
+      body: JSON.stringify({ targetAdminNodeId: 'node-mac-b', id: 'dev-erin-1', deviceName: 'Erin-Mac', os: 'macOS', sshUser: 'erin', primaryIp: '192.168.1.60' }),
+    });
+    assert.equal(erinHs.status, 200);
+    const erinDev = ((await erinHs.json()) as { device: { handshakeStatus: string; hostAdminName: string } }).device;
+    assert.equal(erinDev.handshakeStatus, 'connected');
+    assert.equal(erinDev.hostAdminName, 'Admin-Mac');
+
+    // Non-direct admin node issues "switch to me" command; client acks it
+    const sw = await fetch(`${gwServer.url}/api/admin/devices/dev-dave-1/switch-host`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ targetAdminNodeId: 'node-mac-b', issuedByAdminNodeId: 'node-mac-b' }),
+    });
+    assert.equal(sw.status, 200);
+    const swBody = (await sw.json()) as { command: { id: string; type: string; targetAdminPublicKey: string } };
+    assert.equal(swBody.command.type, 'switch_host');
+    assert.ok(swBody.command.targetAdminPublicKey.startsWith('ssh-ed25519'));
+
+    const meRes = await fetch(`${gwServer.url}/api/client/me`, { headers: daveH });
+    const me = (await meRes.json()) as {
+      boundDevices: Array<{ id: string; pendingCommand?: { id: string } | null }>;
+    };
+    assert.equal(me.boundDevices.find((d) => d.id === 'dev-dave-1')?.pendingCommand?.id, swBody.command.id);
+
+    const ack1 = await fetch(`${gwServer.url}/api/client/devices/dev-dave-1/ack-command`, {
+      method: 'POST',
+      headers: daveH,
+      body: JSON.stringify({ commandId: swBody.command.id, status: 'applied', hostAdminNodeId: 'node-mac-b' }),
+    });
+    assert.equal(ack1.status, 200);
+    const ack1Dev = ((await ack1.json()) as {
+      device: { hostAdminNodeId: string; hostAdminName: string; pendingCommand: unknown; connected: boolean };
+    }).device;
+    assert.equal(ack1Dev.hostAdminNodeId, 'node-mac-b');
+    assert.equal(ack1Dev.hostAdminName, 'Admin-Mac');
+    assert.equal(ack1Dev.pendingCommand, null);
+    assert.equal(ack1Dev.connected, true);
+
+    // Another account cannot ack someone else's device command
+    const foreignAck = await fetch(`${gwServer.url}/api/client/devices/dev-dave-1/ack-command`, {
+      method: 'POST',
+      headers: erinH,
+      body: JSON.stringify({ commandId: 'x', status: 'applied' }),
+    });
+    assert.equal(foreignAck.status, 404);
+
+    // Force-disconnect command
+    const fd = await fetch(`${gwServer.url}/api/admin/devices/dev-dave-1/force-disconnect`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ issuedByAdminNodeId: 'node-win-a' }),
+    });
+    assert.equal(fd.status, 200);
+    const fdBody = (await fd.json()) as {
+      command: { id: string; type: string };
+      device: { handshakeStatus: string; connected: boolean };
+    };
+    assert.equal(fdBody.command.type, 'force_disconnect');
+    assert.equal(fdBody.device.handshakeStatus, 'disconnected');
+    assert.equal(fdBody.device.connected, false);
+    const ack2 = await fetch(`${gwServer.url}/api/client/devices/dev-dave-1/ack-command`, {
+      method: 'POST',
+      headers: daveH,
+      body: JSON.stringify({ commandId: fdBody.command.id, status: 'applied' }),
+    });
+    assert.equal(ack2.status, 200);
+    const ack2Dev = ((await ack2.json()) as { device: { pendingCommand: unknown; hostAdminNodeId: string } }).device;
+    assert.equal(ack2Dev.pendingCommand, null);
+    assert.equal(ack2Dev.hostAdminNodeId, '');
+
+    // Admin overview exposes node + handshake counters
+    const ovRes = await fetch(`${gwServer.url}/api/admin/overview`, { headers: adminHeaders });
+    const ov = (await ovRes.json()) as { totalAdminNodes: number; onlineAdminNodes: number; pendingHandshakes: number };
+    assert.equal(ov.totalAdminNodes, 2);
+    assert.equal(ov.onlineAdminNodes, 2);
+    assert.equal(ov.pendingHandshakes, 0);
+
+    // Removing an admin node (logout) drops it from the list
+    const del = await fetch(`${gwServer.url}/api/admin/nodes/node-win-a`, { method: 'DELETE', headers: adminHeaders });
+    assert.equal(del.status, 200);
+    const nodesAfter = await fetch(`${gwServer.url}/api/admin/nodes`, { headers: adminHeaders });
+    assert.equal(((await nodesAfter.json()) as { nodes: unknown[] }).nodes.length, 1);
+
+  });
 });

@@ -1,7 +1,19 @@
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { GuestDeviceBinding, HostBindingConfig } from '@sandrobina/shared';
-import { getSetting, setSetting, type DbGuestDeviceRecord, type DbUserRecord } from './db.js';
+import type {
+  AdminNodeInfo,
+  GuestDeviceBinding,
+  GuestDeviceCommand,
+  HandshakeStatus,
+  HostBindingConfig,
+} from '@sandrobina/shared';
+import {
+  getSetting,
+  setSetting,
+  type DbAdminNodeRecord,
+  type DbGuestDeviceRecord,
+  type DbUserRecord,
+} from './db.js';
 import { decryptSecret, encryptSecret } from './security.js';
 
 interface JoinedGuestDeviceRow extends DbGuestDeviceRecord {
@@ -37,9 +49,28 @@ function mapDeviceRow(row: JoinedGuestDeviceRow): GuestDeviceBinding {
       env = null;
     }
   }
+  let pendingCommand: GuestDeviceCommand | null = null;
+  if (row.pending_command_json) {
+    try {
+      const parsedCmd = JSON.parse(row.pending_command_json);
+      if (parsedCmd && typeof parsedCmd === 'object') pendingCommand = parsedCmd as GuestDeviceCommand;
+    } catch {
+      pendingCommand = null;
+    }
+  }
+  const rawHandshake = String(row.handshake_status || 'connected');
+  const handshakeStatus: HandshakeStatus = (['pending', 'connected', 'disconnected', 'rejected'] as const).includes(
+    rawHandshake as HandshakeStatus,
+  )
+    ? (rawHandshake as HandshakeStatus)
+    : 'connected';
   return {
     id: row.id,
     userId: Number(row.user_id),
+    hostAdminNodeId: row.host_admin_node_id || '',
+    hostAdminName: row.host_admin_name || '',
+    handshakeStatus,
+    pendingCommand,
     accountUsername: row.account_username || '',
     accountDisplayName: row.account_display_name || row.account_username || '',
     accountEnabled: Number(row.account_enabled) === 1,
@@ -252,7 +283,8 @@ export function markDeviceDisconnected(
   const now = Date.now();
   db.prepare(
     `UPDATE guest_devices
-     SET connected = 0, ssh_authorized = 0, updated_at = ?
+     SET connected = 0, ssh_authorized = 0, handshake_status = 'disconnected',
+         host_admin_node_id = '', host_admin_name = '', updated_at = ?
      WHERE id = ?`,
   ).run(now, deviceId);
   return getBoundDeviceById(db, deviceId);
@@ -355,4 +387,256 @@ export function saveHostBindingConfig(
     zerotierNetworkId: nextZt,
     updatedAt: now,
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Admin nodes (multiple machines logged into the single admin account)
+// ---------------------------------------------------------------------------
+
+function httpError(message: string, statusCode: number): Error & { statusCode: number } {
+  const err = new Error(message) as Error & { statusCode: number };
+  err.statusCode = statusCode;
+  return err;
+}
+
+function mapAdminNodeRow(row: DbAdminNodeRecord, now = Date.now()): AdminNodeInfo {
+  let endpoints: string[] = [];
+  try {
+    const parsed = JSON.parse(row.endpoints_json || '[]');
+    if (Array.isArray(parsed)) {
+      endpoints = parsed.map((x) => String(x || '').trim()).filter(Boolean);
+    }
+  } catch {
+    endpoints = [];
+  }
+  const lastSeenAt = Number(row.last_seen_at) || 0;
+  return {
+    id: row.id,
+    nodeName: row.node_name || row.hostname || row.id,
+    hostname: row.hostname || '',
+    os: row.os || '',
+    sshUser: row.ssh_user || '',
+    sshPort: Number(row.ssh_port) || 22,
+    primaryIp: row.primary_ip || '',
+    fallbackIp: row.fallback_ip || '',
+    zerotierIp: row.zerotier_ip || '',
+    zerotierNodeId: row.zerotier_node_id || '',
+    zerotierNetworkId: row.zerotier_network_id || '',
+    publicKey: row.public_key || '',
+    endpoints,
+    online: now - lastSeenAt < ADMIN_NODE_ONLINE_MS,
+    lastSeenAt,
+    createdAt: Number(row.created_at) || 0,
+    updatedAt: Number(row.updated_at) || 0,
+  };
+}
+
+export const ADMIN_NODE_ONLINE_MS = 180_000;
+
+export function listAdminNodes(db: DatabaseSync): AdminNodeInfo[] {
+  const now = Date.now();
+  const rows = db
+    .prepare('SELECT * FROM admin_nodes ORDER BY last_seen_at DESC, created_at ASC')
+    .all() as unknown as DbAdminNodeRecord[];
+  return rows.map((r) => mapAdminNodeRow(r, now));
+}
+
+export function getAdminNodeById(db: DatabaseSync, nodeId: string): AdminNodeInfo | null {
+  const row = db
+    .prepare('SELECT * FROM admin_nodes WHERE id = ?')
+    .get(nodeId) as unknown as DbAdminNodeRecord | undefined;
+  return row ? mapAdminNodeRow(row) : null;
+}
+
+export interface UpsertAdminNodeInput {
+  id?: string;
+  nodeName?: string;
+  hostname?: string;
+  os?: string;
+  sshUser?: string;
+  sshPort?: number;
+  primaryIp?: string;
+  fallbackIp?: string;
+  zerotierIp?: string;
+  zerotierNodeId?: string;
+  zerotierNetworkId?: string;
+  publicKey?: string;
+  endpoints?: string[];
+}
+
+export function upsertAdminNode(db: DatabaseSync, input: UpsertAdminNodeInput): AdminNodeInfo {
+  const id = String(input.id || '').trim();
+  if (!/^[a-zA-Z0-9._:-]{3,96}$/.test(id)) {
+    throw httpError('管理员节点 ID 无效', 400);
+  }
+  const existing = db
+    .prepare('SELECT * FROM admin_nodes WHERE id = ?')
+    .get(id) as unknown as DbAdminNodeRecord | undefined;
+  const now = Date.now();
+  const str = (v: unknown, fallback: string) => String(v ?? fallback ?? '').trim();
+  const hostname = str(input.hostname, existing?.hostname || '');
+  const nodeName = str(input.nodeName, existing?.node_name || hostname || id) || hostname || id;
+  const portRaw = Number(input.sshPort ?? existing?.ssh_port ?? 22);
+  const sshPort = Number.isFinite(portRaw) && portRaw >= 1 && portRaw <= 65535 ? Math.floor(portRaw) : 22;
+  const publicKey = str(input.publicKey, existing?.public_key || '').split(/\r?\n/)[0].trim();
+  const endpoints = Array.isArray(input.endpoints)
+    ? Array.from(new Set(input.endpoints.map((x) => String(x || '').trim()).filter(Boolean)))
+    : (() => {
+        try {
+          return JSON.parse(existing?.endpoints_json || '[]') as string[];
+        } catch {
+          return [];
+        }
+      })();
+  const vals = [
+    nodeName,
+    hostname,
+    str(input.os, existing?.os || ''),
+    str(input.sshUser, existing?.ssh_user || ''),
+    sshPort,
+    str(input.primaryIp, existing?.primary_ip || ''),
+    str(input.fallbackIp, existing?.fallback_ip || ''),
+    str(input.zerotierIp, existing?.zerotier_ip || ''),
+    str(input.zerotierNodeId, existing?.zerotier_node_id || ''),
+    str(input.zerotierNetworkId, existing?.zerotier_network_id || ''),
+    publicKey,
+    JSON.stringify(endpoints),
+  ];
+  if (existing) {
+    db.prepare(
+      `UPDATE admin_nodes SET node_name = ?, hostname = ?, os = ?, ssh_user = ?, ssh_port = ?,
+         primary_ip = ?, fallback_ip = ?, zerotier_ip = ?, zerotier_node_id = ?, zerotier_network_id = ?,
+         public_key = ?, endpoints_json = ?, last_seen_at = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(...(vals as [string, string, string, string, number, string, string, string, string, string, string, string]), now, now, id);
+  } else {
+    db.prepare(
+      `INSERT INTO admin_nodes (id, node_name, hostname, os, ssh_user, ssh_port, primary_ip, fallback_ip,
+         zerotier_ip, zerotier_node_id, zerotier_network_id, public_key, endpoints_json,
+         last_seen_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, ...(vals as [string, string, string, string, number, string, string, string, string, string, string, string]), now, now, now);
+  }
+  return getAdminNodeById(db, id)!;
+}
+
+export function deleteAdminNode(db: DatabaseSync, nodeId: string): boolean {
+  const info = db.prepare('DELETE FROM admin_nodes WHERE id = ?').run(nodeId);
+  return Number(info.changes) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Client handshake (direct host) + remote commands
+// ---------------------------------------------------------------------------
+
+export function requestClientHandshake(
+  db: DatabaseSync,
+  user: DbUserRecord,
+  input: UpsertGuestDeviceInput & { targetAdminNodeId?: string },
+): GuestDeviceBinding {
+  const targetId = String(input.targetAdminNodeId || '').trim();
+  const node = targetId ? getAdminNodeById(db, targetId) : null;
+  if (!node) {
+    throw httpError('目标管理员主机不存在或已被移除，请刷新主机列表后重试', 404);
+  }
+  const auto = Number(user.auto_approve_handshake) === 1;
+  const device = upsertBoundDevice(
+    db,
+    user.id,
+    { ...input, connected: auto, sshAuthorized: true },
+    { isAdmin: false },
+  );
+  db.prepare(
+    `UPDATE guest_devices
+     SET host_admin_node_id = ?, host_admin_name = ?, handshake_status = ?,
+         pending_command_json = NULL, updated_at = ?
+     WHERE id = ?`,
+  ).run(node.id, node.nodeName, auto ? 'connected' : 'pending', Date.now(), device.id);
+  return getBoundDeviceById(db, device.id)!;
+}
+
+export function reviewHandshake(
+  db: DatabaseSync,
+  deviceId: string,
+  action: 'approve' | 'reject',
+  actorAdminNodeId?: string,
+): GuestDeviceBinding | null {
+  const existing = db
+    .prepare('SELECT * FROM guest_devices WHERE id = ?')
+    .get(deviceId) as unknown as DbGuestDeviceRecord | undefined;
+  if (!existing) return null;
+  const hostId = String(existing.host_admin_node_id || '');
+  if (actorAdminNodeId && hostId && hostId !== actorAdminNodeId) {
+    throw httpError('仅限目标直连管理员主机审批该握手请求', 403);
+  }
+  const approve = action === 'approve';
+  db.prepare(
+    `UPDATE guest_devices
+     SET handshake_status = ?, connected = ?, ssh_authorized = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(approve ? 'connected' : 'rejected', approve ? 1 : 0, approve ? 1 : 0, Date.now(), deviceId);
+  return getBoundDeviceById(db, deviceId);
+}
+
+export function issueDeviceCommand(
+  db: DatabaseSync,
+  deviceId: string,
+  command: GuestDeviceCommand,
+): GuestDeviceBinding | null {
+  const existing = db
+    .prepare('SELECT id FROM guest_devices WHERE id = ?')
+    .get(deviceId) as { id: string } | undefined;
+  if (!existing) return null;
+  db.prepare('UPDATE guest_devices SET pending_command_json = ?, updated_at = ? WHERE id = ?').run(
+    JSON.stringify(command),
+    Date.now(),
+    deviceId,
+  );
+  return getBoundDeviceById(db, deviceId);
+}
+
+export function ackDeviceCommand(
+  db: DatabaseSync,
+  deviceId: string,
+  ownerUserId: number,
+  result: { commandId: string; status: 'applied' | 'failed'; hostAdminNodeId?: string },
+): GuestDeviceBinding | null {
+  const existing = db
+    .prepare('SELECT * FROM guest_devices WHERE id = ?')
+    .get(deviceId) as unknown as DbGuestDeviceRecord | undefined;
+  if (!existing || Number(existing.user_id) !== ownerUserId) return null;
+  let pending: GuestDeviceCommand | null = null;
+  if (existing.pending_command_json) {
+    try {
+      pending = JSON.parse(existing.pending_command_json) as GuestDeviceCommand;
+    } catch {
+      pending = null;
+    }
+  }
+  if (pending && result.commandId && pending.id !== result.commandId) {
+    return getBoundDeviceById(db, deviceId);
+  }
+  const now = Date.now();
+  if (result.status === 'applied' && pending) {
+    if (pending.type === 'switch_host') {
+      const node = getAdminNodeById(db, String(result.hostAdminNodeId || pending.targetAdminNodeId || ''));
+      db.prepare(
+        `UPDATE guest_devices
+         SET host_admin_node_id = ?, host_admin_name = ?, handshake_status = 'connected',
+             connected = 1, ssh_authorized = 1, pending_command_json = NULL, updated_at = ?
+         WHERE id = ?`,
+      ).run(node?.id || pending.targetAdminNodeId || '', node?.nodeName || pending.targetAdminName || '', now, deviceId);
+    } else {
+      db.prepare(
+        `UPDATE guest_devices
+         SET host_admin_node_id = '', host_admin_name = '', handshake_status = 'disconnected',
+             connected = 0, ssh_authorized = 0, pending_command_json = NULL, updated_at = ?
+         WHERE id = ?`,
+      ).run(now, deviceId);
+    }
+  } else {
+    db.prepare('UPDATE guest_devices SET pending_command_json = NULL, updated_at = ? WHERE id = ?').run(now, deviceId);
+  }
+  return getBoundDeviceById(db, deviceId);
 }

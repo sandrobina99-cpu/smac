@@ -1,9 +1,10 @@
+import type { AdminNodeInfo } from '@sandrobina/shared';
+
 export interface DesktopConfig {
   serverUrl: string;
   theme: 'system' | 'light' | 'dark';
   lastUsername?: string;
 }
-
 
 export interface UpdateInfo {
   currentVersion: string;
@@ -49,11 +50,13 @@ export interface GuestLocalStatus {
   fallbackIp: string;
   zerotierIp: string;
   sshAuthorized: boolean;
+  authorizedAdminNodeId: string;
 }
 
 export interface GuestConnectResult {
   ok: boolean;
   sshAuthorized: boolean;
+  authorizedAdminNodeId: string;
   device: {
     deviceId: string;
     deviceName: string;
@@ -65,6 +68,7 @@ export interface GuestConnectResult {
     fallbackIp: string;
     zerotierIp: string;
     zerotierNetworkId: string;
+    targetAdminNodeId: string;
     connected: boolean;
     sshAuthorized: boolean;
   };
@@ -85,6 +89,10 @@ export interface DesktopBridge {
   getGuestStatus: (hostPublicKey?: string) => Promise<GuestLocalStatus>;
   connectGuestHost: (
     hostBinding: Record<string, unknown>,
+    deviceName?: string,
+  ) => Promise<GuestConnectResult>;
+  connectGuestAdminNode: (
+    adminNode: AdminNodeInfo,
     deviceName?: string,
   ) => Promise<GuestConnectResult>;
   disconnectGuestHost: (

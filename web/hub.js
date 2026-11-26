@@ -241,15 +241,20 @@
       const barState = pct >= 95 ? 'bad' : (pct >= 75 ? 'warn' : 'ok');
       const bound = Array.isArray(u.boundDevices) ? u.boundDevices : [];
       const devChips = bound.length
-        ? bound.map(d =>
-            '<div class="hub-bound-chip ' + (d.connected ? 'on' : 'off') + '">' +
+        ? bound.map(d => {
+            const hs = d.handshakeStatus || 'connected';
+            const chipCls = hs === 'pending' ? 'pending' : (d.connected ? 'on' : 'off');
+            const hostLabel = d.hostAdminName ? ('直连 ' + d.hostAdminName) : '';
+            const stateLabel = hs === 'pending' ? '待确认' : (hs === 'rejected' ? '已拒绝' : (d.connected ? '' : '已断联'));
+            return '<div class="hub-bound-chip ' + chipCls + '">' +
               '<span class="dot"></span>' +
               '<b>' + esc(d.deviceName) + '</b>' +
-              '<em>' + esc(d.os || 'Guest') + (d.primaryIp ? (' · ' + esc(d.primaryIp)) : '') + '</em>' +
+              '<em>' + esc(d.os || 'Guest') + (d.primaryIp ? (' · ' + esc(d.primaryIp)) : '') + (stateLabel ? (' · ' + stateLabel) : '') + '</em>' +
+              (hostLabel ? '<span class="chip-host">' + esc(hostLabel) + '</span>' : '') +
               '<button type="button" class="chip-x" data-hub-act="unbind-device" data-dev-id="' + esc(d.id) + '" title="解绑该客机">×</button>' +
-            '</div>'
-          ).join('')
-        : '<span class="hub-no-dev">尚未绑定客机（客机端使用此账号登录后将自动归属到此处，或在「远程设备」手动绑定）</span>';
+            '</div>';
+          }).join('')
+        : '<span class="hub-no-dev">尚未绑定客机（客机端使用此账号登录后向任一管理员主机发起握手即可接入）</span>';
 
       return '<article class="hub-user-card' + (u.enabled ? '' : ' disabled') + '" data-uid="' + u.id + '">' +
         '<div class="hub-user-top">' +
@@ -257,6 +262,7 @@
             '<div class="hub-user-title"><h3>' + esc(u.displayName || u.username) + '</h3><code>@' + esc(u.username) + '</code>' +
               '<span class="badge" data-state="' + (u.enabled ? 'ok' : 'bad') + '">' + (u.enabled ? '已启用' : '已禁用') + '</span>' +
               '<span class="hub-dev-count-pill">绑定客机 ' + bound.length + ' 台</span>' +
+              (u.autoApproveHandshake ? '<span class="hub-trust-pill" title="该账号下的客户端向管理员主机握手时免审自动通过">免审直连</span>' : '') +
             '</div>' +
             (u.notes ? '<div class="hub-user-note">' + esc(u.notes) + '</div>' : '') +
           '</div>' +
@@ -377,6 +383,7 @@
     $('#huPasswordRow').hidden = Boolean(user);
     $('#huLimit').value = String(user ? user.weeklyTokenLimit : (HS.settings ? HS.settings.defaultWeeklyTokenLimit : 1000000));
     $('#huNotes').value = user ? (user.notes || '') : '';
+    if ($('#huAutoApprove')) $('#huAutoApprove').checked = Boolean(user && user.autoApproveHandshake);
     $('#huError').hidden = true;
     $('#hubUserModal').hidden = false;
     document.body.classList.add('modal-open');
@@ -390,13 +397,14 @@
     const password = $('#huPassword').value;
     const weeklyTokenLimit = Number($('#huLimit').value);
     const notes = $('#huNotes').value.trim();
+    const autoApproveHandshake = Boolean($('#huAutoApprove') && $('#huAutoApprove').checked);
 
     try {
       if (HS.editingUserId) {
-        await reqJson('PATCH', '/api/hub/admin/users/' + HS.editingUserId, { username, displayName, weeklyTokenLimit, notes });
+        await reqJson('PATCH', '/api/hub/admin/users/' + HS.editingUserId, { username, displayName, weeklyTokenLimit, notes, autoApproveHandshake });
         notify('账号已更新', 'ok');
       } else {
-        const res = await reqJson('POST', '/api/hub/admin/users', { username, displayName, password, weeklyTokenLimit, notes, enabled: true, modelAccessMode: 'all_except_denied' });
+        const res = await reqJson('POST', '/api/hub/admin/users', { username, displayName, password, weeklyTokenLimit, notes, enabled: true, autoApproveHandshake, modelAccessMode: 'all_except_denied' });
         notify('账号已创建并生成专属 API Key：' + (res.user && res.user.apiKeyPrefix || ''), 'ok', 4500);
       }
       if (typeof window.closeModal === 'function') window.closeModal('hubUserModal');

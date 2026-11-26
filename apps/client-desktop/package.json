@@ -1,9 +1,9 @@
 {
   "name": "@sandrobina/client-desktop",
-  "version": "1.2.1",
+  "version": "2.0.0",
   "private": true,
   "author": "sandrobina99-cpu",
-  "description": "smac 客户端 — 客机主机接入与个人 API 额度控制台",
+  "description": "smac 客户端 — 主机定向握手接入、个人 API 额度、AI 对话测试与 CLI 一键配置",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev:renderer": "vite",
@@ -62,16 +62,17 @@
     "win": {
       "icon": "build/icon.png",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "icon": "build/icon.png",
     "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "smac 客户端",
       "artifactName": "sandrobina-client-${version}-win-setup.${ext}"
-    },
-    "portable": {
-      "artifactName": "sandrobina-client-${version}-win-portable.${ext}"
     }
   }
 }

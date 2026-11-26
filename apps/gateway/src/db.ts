@@ -35,6 +35,7 @@ export interface DbUserRecord {
   weekly_token_limit: number;
   model_access_mode: 'all_except_denied' | 'allow_list';
   notes: string;
+  auto_approve_handshake?: number;
   created_at: number;
   updated_at: number;
 }
@@ -69,6 +70,29 @@ export interface DbGuestDeviceRecord {
   connected: number;
   ssh_authorized: number;
   env_json: string | null;
+  host_admin_node_id?: string;
+  host_admin_name?: string;
+  handshake_status?: string;
+  pending_command_json?: string | null;
+  last_seen_at: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DbAdminNodeRecord {
+  id: string;
+  node_name: string;
+  hostname: string;
+  os: string;
+  ssh_user: string;
+  ssh_port: number;
+  primary_ip: string;
+  fallback_ip: string;
+  zerotier_ip: string;
+  zerotier_node_id: string;
+  zerotier_network_id: string;
+  public_key: string;
+  endpoints_json: string;
   last_seen_at: number;
   created_at: number;
   updated_at: number;
@@ -180,6 +204,25 @@ export function openDatabase(dbPath: string, seed: SeedOptions): DatabaseSync {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS admin_nodes (
+      id TEXT PRIMARY KEY,
+      node_name TEXT NOT NULL,
+      hostname TEXT NOT NULL DEFAULT '',
+      os TEXT NOT NULL DEFAULT '',
+      ssh_user TEXT NOT NULL DEFAULT '',
+      ssh_port INTEGER NOT NULL DEFAULT 22,
+      primary_ip TEXT NOT NULL DEFAULT '',
+      fallback_ip TEXT NOT NULL DEFAULT '',
+      zerotier_ip TEXT NOT NULL DEFAULT '',
+      zerotier_node_id TEXT NOT NULL DEFAULT '',
+      zerotier_network_id TEXT NOT NULL DEFAULT '',
+      public_key TEXT NOT NULL DEFAULT '',
+      endpoints_json TEXT NOT NULL DEFAULT '[]',
+      last_seen_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage_ledger(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_ledger(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
@@ -192,6 +235,12 @@ export function openDatabase(dbPath: string, seed: SeedOptions): DatabaseSync {
       SELECT RAISE(ABORT, 'only_one_admin_allowed');
     END;
   `);
+
+  ensureColumn(db, 'users', 'auto_approve_handshake', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'guest_devices', 'host_admin_node_id', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'guest_devices', 'host_admin_name', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'guest_devices', 'handshake_status', "TEXT NOT NULL DEFAULT 'connected'");
+  ensureColumn(db, 'guest_devices', 'pending_command_json', 'TEXT');
 
   const now = Date.now();
   const adminCountRow = db
@@ -248,6 +297,13 @@ export function openDatabase(dbPath: string, seed: SeedOptions): DatabaseSync {
   }
 
   return db;
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  }
 }
 
 export function getSetting(db: DatabaseSync, key: string): string {

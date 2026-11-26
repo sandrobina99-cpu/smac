@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import type { GuestDeviceCommand } from '@sandrobina/shared';
 
 class HubEventBus extends EventEmitter {
   emitUserUpdated(userId: number): void {
@@ -7,6 +8,18 @@ class HubEventBus extends EventEmitter {
 
   emitModelsUpdated(): void {
     this.emit('models-updated');
+  }
+
+  emitAdminNodesUpdated(): void {
+    this.emit('admin-nodes-updated');
+  }
+
+  emitDevicesUpdated(): void {
+    this.emit('devices-updated');
+  }
+
+  emitDeviceCommand(userId: number, deviceId: string, command: GuestDeviceCommand): void {
+    this.emit('device-command', { userId, deviceId, command });
   }
 }
 

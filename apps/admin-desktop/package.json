@@ -1,21 +1,22 @@
 {
   "name": "@sandrobina/admin-desktop",
-  "version": "1.2.1",
+  "version": "2.0.0",
   "private": true,
   "author": "sandrobina99-cpu",
-  "description": "smac 管理端 — 主机设备与 API 分发统一管理控制台",
+  "description": "smac 管理端 — 文件中枢、全局网络拓扑、远程 Agent 与 API 分发一体化控制台",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev:renderer": "vite",
-    "dev:electron": "tsc -p tsconfig.electron.json && node scripts/rename-cjs.mjs && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
-    "dev": "concurrently -k \"npm:dev:renderer\" \"wait-on tcp:5173 && npm:dev:electron\"",
+    "dev:electron": "tsc -p tsconfig.electron.json && node scripts/rename-cjs.mjs && electron .",
+    "dev": "npm run dev:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json && node scripts/rename-cjs.mjs",
+    "build:runtime": "node scripts/stage-runtime.mjs",
     "build": "npm run build:renderer && npm run build:electron",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "pack:mac": "npm run build && electron-builder --mac",
-    "pack:mac:dir": "npm run build && electron-builder --mac --dir",
-    "pack:win": "npm run build && electron-builder --win"
+    "pack:mac": "npm run build && npm run build:runtime && electron-builder --mac",
+    "pack:mac:dir": "npm run build && npm run build:runtime && electron-builder --mac --dir",
+    "pack:win": "npm run build && npm run build:runtime && electron-builder --win"
   },
   "dependencies": {
     "@sandrobina/shared": "*",
@@ -48,7 +49,17 @@
       "dist/**/*",
       "dist-electron/**/*",
       "build/icon.png",
-      "!node_modules/**/*"
+      "!node_modules/**/*",
+      "!runtime/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "smac-runtime",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "target": [
@@ -62,16 +73,17 @@
     "win": {
       "icon": "build/icon.png",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "icon": "build/icon.png",
     "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "smac 管理端",
       "artifactName": "sandrobina-admin-${version}-win-setup.${ext}"
-    },
-    "portable": {
-      "artifactName": "sandrobina-admin-${version}-win-portable.${ext}"
     }
   }
 }

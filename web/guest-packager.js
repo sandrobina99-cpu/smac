@@ -133,9 +133,14 @@ function upsertGuestDevice(payload) {
   const rawData = readJson(DEVICES_FILE);
   const devices = Array.isArray(rawData) ? rawData : (rawData && Array.isArray(rawData.devices) ? rawData.devices : []);
 
-  // 查找是否已有同一 IP 或同名的设备
+  // 查找是否已有同一网关 ID、同一 IP 或同名的非管理员设备
   let existing = devices.find(d =>
-    d && (d.host === primaryIp || (fallbackIp && (d.host === fallbackIp || d.fallbackHost === fallbackIp)) || d.name.toLowerCase() === rawName.toLowerCase())
+    d && !d.isAdminNode && (
+      (payload.gatewayDeviceId && d.gatewayDeviceId === payload.gatewayDeviceId)
+      || d.host === primaryIp
+      || (fallbackIp && (d.host === fallbackIp || d.fallbackHost === fallbackIp))
+      || String(d.name || '').toLowerCase() === rawName.toLowerCase()
+    )
   );
 
   const now = new Date().toISOString();
@@ -161,6 +166,10 @@ function upsertGuestDevice(payload) {
     if (payload.accountDisplayName) existing.accountDisplayName = String(payload.accountDisplayName).trim();
     if (payload.accountEnabled !== undefined) existing.accountEnabled = payload.accountEnabled !== false;
     if (payload.gatewayDeviceId) existing.gatewayDeviceId = String(payload.gatewayDeviceId).trim();
+    if (payload.hostAdminNodeId !== undefined) existing.hostAdminNodeId = String(payload.hostAdminNodeId || '').trim();
+    if (payload.hostAdminName !== undefined) existing.hostAdminName = String(payload.hostAdminName || '').trim();
+    if (payload.handshakeStatus !== undefined) existing.handshakeStatus = String(payload.handshakeStatus || 'connected').trim();
+    if (payload.pendingCommand !== undefined) existing.pendingCommand = payload.pendingCommand || null;
     existing.guestDisconnected = Boolean(payload.guestDisconnected);
     existing.updatedAt = now;
     existing.lastConnectedAt = now;
@@ -192,6 +201,12 @@ function upsertGuestDevice(payload) {
       accountDisplayName: String(payload.accountDisplayName || '').trim(),
       accountEnabled: payload.accountEnabled !== false,
       gatewayDeviceId: String(payload.gatewayDeviceId || '').trim(),
+      isAdminNode: false,
+      adminNodeId: '',
+      hostAdminNodeId: String(payload.hostAdminNodeId || '').trim(),
+      hostAdminName: String(payload.hostAdminName || '').trim(),
+      handshakeStatus: String(payload.handshakeStatus || 'connected').trim(),
+      pendingCommand: payload.pendingCommand || null,
       guestDisconnected: Boolean(payload.guestDisconnected),
       guestEnv: payload.env && typeof payload.env === 'object' ? payload.env : null,
       createdAt: now,
@@ -562,6 +577,7 @@ function buildGuestSetupZip() {
 }
 
 module.exports = {
+  ensureSshKeyPair,
   ensurePairingConfig,
   startPairingListener,
   upsertGuestDevice,

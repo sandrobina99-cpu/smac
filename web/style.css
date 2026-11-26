@@ -2849,5 +2849,169 @@ body.term-open { overflow: hidden; }
 .btn.danger { color: #fda4af; border-color: rgba(255, 112, 136, 0.3); }
 .btn.danger:hover { background: rgba(255, 112, 136, 0.14); }
 
+/* ---------- 全局网络拓扑：管理员设备互联 · 直连主机隔离 · 握手审批 ---------- */
+.network-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.network-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.network-section-head h2 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 3px;
+  font-size: 16px;
+  font-weight: 640;
+}
+.network-section-head p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.net-sec-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #93c5fd;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.net-sec-pill.star {
+  color: #fde68a;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.16), rgba(245, 158, 11, 0.1));
+  border-color: rgba(251, 191, 36, 0.42);
+}
+
+.device-card.is-admin-node {
+  border-color: rgba(251, 191, 36, 0.3);
+  background: linear-gradient(160deg, rgba(251, 191, 36, 0.065), rgba(56, 189, 248, 0.028));
+}
+.device-card.is-local-self {
+  border-color: rgba(110, 231, 207, 0.34);
+  background: linear-gradient(160deg, rgba(110, 231, 207, 0.075), rgba(106, 168, 255, 0.032));
+}
+.device-card.is-pending-handshake {
+  border-color: rgba(242, 182, 74, 0.52);
+  box-shadow: 0 24px 60px -38px rgba(242, 182, 74, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.device-card.is-remote-locked {
+  border-color: rgba(167, 139, 250, 0.26);
+  background: linear-gradient(160deg, rgba(167, 139, 250, 0.048), rgba(255, 255, 255, 0.015));
+}
+
+.tag.admin-node-tag {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.2), rgba(245, 158, 11, 0.12));
+  border: 1px solid rgba(251, 191, 36, 0.46);
+  color: #fde68a;
+  font-weight: 650;
+}
+.tag.direct-host-tag.local {
+  background: rgba(63, 216, 164, 0.12);
+  border: 1px solid rgba(63, 216, 164, 0.34);
+  color: #9bf3d3;
+  font-weight: 600;
+}
+.tag.direct-host-tag.remote {
+  background: rgba(167, 139, 250, 0.14);
+  border: 1px solid rgba(167, 139, 250, 0.36);
+  color: #ddd6fe;
+  font-weight: 600;
+}
+.tag.handshake-tag.pending {
+  background: rgba(242, 182, 74, 0.16);
+  border: 1px solid rgba(242, 182, 74, 0.44);
+  color: #ffd894;
+  font-weight: 620;
+}
+.tag.handshake-tag.rejected,
+.tag.handshake-tag.disconnected {
+  background: rgba(255, 112, 136, 0.14);
+  border: 1px solid rgba(255, 112, 136, 0.38);
+  color: #fda4af;
+  font-weight: 600;
+}
+
+.handshake-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(242, 182, 74, 0.42);
+  background: linear-gradient(135deg, rgba(242, 182, 74, 0.13), rgba(110, 231, 207, 0.05));
+}
+.handshake-banner-text {
+  font-size: 12px;
+  color: #ffe4b3;
+  line-height: 1.45;
+}
+.handshake-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.remote-lock-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(167, 139, 250, 0.34);
+  background: rgba(167, 139, 250, 0.075);
+}
+.remote-lock-text {
+  font-size: 11.8px;
+  color: #d8ccff;
+  line-height: 1.45;
+}
+.remote-lock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.device-card.is-remote-locked .device-quick-row button:disabled,
+.device-card.is-remote-locked .device-actions button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+.hub-trust-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(63, 216, 164, 0.12);
+  color: #9bf3d3;
+  border: 1px solid rgba(63, 216, 164, 0.32);
+}
+.hub-bound-chip .chip-host {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  background: rgba(106, 168, 255, 0.14);
+  color: #bae6fd;
+}
+.hub-bound-chip.pending {
+  background: rgba(242, 182, 74, 0.14);
+  border-color: rgba(242, 182, 74, 0.4);
+  color: #fde68a;
+}
+.hub-bound-chip.pending .dot { background: #fbbf24; }
+
+
 
 

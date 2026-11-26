@@ -96,8 +96,17 @@ function allDevices() {
   return list.filter(item => item && item.id);
 }
 
+function isDeviceDirectlyOperable(item) {
+  if (!item) return false;
+  if (item.isAdminNode) return true;
+  const localId = (state.data && state.data.localAdminNodeId) || '';
+  if (item.hostAdminNodeId && localId && item.hostAdminNodeId !== localId) return false;
+  if (item.handshakeStatus === 'pending' || item.handshakeStatus === 'rejected') return false;
+  return true;
+}
+
 function remoteDevices() {
-  const list = allDevices();
+  const list = allDevices().filter(isDeviceDirectlyOperable);
   if (hasLegacyMacTarget()) {
     return list.filter(item => String(item.name || '').toLowerCase() !== 'mac');
   }
@@ -535,7 +544,7 @@ function renderClipDevices(data) {
   const listEl = $('#clipDeviceList');
   const summaryEl = $('#clipDevicesSummary');
   if (!listEl) return;
-  const devices = allDevices();
+  const devices = allDevices().filter(isDeviceDirectlyOperable);
   const clip = data.clip || { running: false, deviceIds: [], status: null };
   const selectedIds = Array.isArray(clip.deviceIds) ? clip.deviceIds : [];
   const selectedSet = new Set(selectedIds);
@@ -784,6 +793,17 @@ async function refreshState() {
   renderClip(data);
   renderJob(data);
   renderAgent(data.agent);
+  if (window.SmacRemote && typeof window.SmacRemote.syncFromState === 'function') {
+    const topoSig = JSON.stringify([
+      data.localAdminNodeId || '',
+      (data.adminNodes || []).map(n => [n.id, n.online, n.primaryIp]),
+      (data.devices || []).map(d => [d.id, d.isAdminNode, d.hostAdminNodeId, d.handshakeStatus, d.guestDisconnected, Boolean(d.pendingCommand)])
+    ]);
+    if (topoSig !== state.lastTopoSig) {
+      state.lastTopoSig = topoSig;
+      window.SmacRemote.syncFromState(data);
+    }
+  }
   $('#footStamp').textContent = '更新于 ' + clock(data.serverTime);
 }
 
@@ -1512,13 +1532,20 @@ async function handleDropTransfer(dt) {
     }
   }
 
-  // 2. macOS 原生 WKWebView 零拷贝本地路径直传通道
-  const nativePaths = (Array.isArray(window.__smacNativeDragPaths)
+  // 2. Electron / macOS 原生零拷贝本地路径直传通道
+  let nativePaths = (Array.isArray(window.__smacNativeDragPaths)
     && window.__smacNativeDragPaths.length > 0
     && (Date.now() - (window.__smacNativeDragAt || 0) < 25000))
     ? window.__smacNativeDragPaths.slice()
     : null;
   window.__smacNativeDragPaths = null;
+
+  if (!nativePaths && rawFiles.length > 0 && window.desktopBridge && typeof window.desktopBridge.getPathForFile === 'function') {
+    try {
+      const electronPaths = rawFiles.map(f => window.desktopBridge.getPathForFile(f)).filter(Boolean);
+      if (electronPaths.length === rawFiles.length) nativePaths = electronPaths;
+    } catch { }
+  }
 
   const dz = $('#sendDropZone');
   if (nativePaths && nativePaths.length) {
@@ -2404,6 +2431,61 @@ async function boot() {
   applyView(location.hash === '#hub' ? 'hub' : (location.hash === '#remote' ? 'remote' : (location.hash === '#agent' ? 'agent' : 'files')), false);
   const footAddr = $('#footAddr');
   if (footAddr && location.host) footAddr.textContent = location.host;
+  if (window.desktopBridge && typeof window.desktopBridge.checkUpdate === 'function') {
+    const updBtn = $('#btnTopUpdate');
+    const updText = $('#topUpdateText');
+    if (updBtn && updText) {
+      updBtn.hidden = false;
+      window.desktopBridge.getAppInfo?.().then(info => {
+        if (info && info.version && updText.textContent === '检查更新') {
+          updText.textContent = 'v' + info.version + ' · 检查更新';
+        }
+      }).catch(() => {});
+      let updating = false;
+      updBtn.addEventListener('click', async () => {
+        if (updating) return;
+        updating = true;
+        updText.textContent = '检查中…';
+        try {
+          const info = await window.desktopBridge.checkUpdate();
+          if (!info.hasUpdate) {
+            toast('当前已是最新版本 v' + info.currentVersion, 'ok', 2800);
+            updText.textContent = 'v' + info.currentVersion + ' · 最新';
+            return;
+          }
+          const ok = await confirmDialog(
+            '发现新版本 v' + info.latestVersion,
+            '当前版本 <b>v' + escapeHtml(info.currentVersion) + '</b>，最新版本 <b>v' + escapeHtml(info.latestVersion) + '</b>。' +
+            (info.notes ? '<br><br>' + escapeHtml(info.notes).replace(/\r?\n/g, '<br>') : '') +
+            '<br><br>是否立即下载校验并自动安装更新？',
+            '下载并安装'
+          );
+          if (!ok) {
+            updText.textContent = '有新版本 v' + info.latestVersion;
+            return;
+          }
+          const unsub = window.desktopBridge.onUpdateProgress?.(p => {
+            if (p && p.total > 0) {
+              const pct = Math.min(99, Math.round((p.received / p.total) * 100));
+              updText.textContent = '下载中 ' + pct + '%';
+            }
+          });
+          updText.textContent = '下载中…';
+          try {
+            const res = await window.desktopBridge.installUpdate();
+            toast(res.message || '更新已准备就绪', res.ok ? 'ok' : 'warn', 5000);
+          } finally {
+            if (typeof unsub === 'function') unsub();
+          }
+        } catch (err) {
+          toast(err && err.message ? err.message : '检查更新失败', 'error');
+          updText.textContent = '检查更新';
+        } finally {
+          updating = false;
+        }
+      });
+    }
+  }
   if (new URLSearchParams(location.search).has('add')) {
     resetAddForm();
     openModal('addModal');

@@ -40,9 +40,45 @@ export interface ModelEntry {
   defaultReasoningEffort?: string | null;
 }
 
+export type HandshakeStatus = 'pending' | 'connected' | 'disconnected' | 'rejected';
+
+export interface AdminNodeInfo {
+  id: string;
+  nodeName: string;
+  hostname: string;
+  os: string;
+  sshUser: string;
+  sshPort: number;
+  primaryIp: string;
+  fallbackIp: string;
+  zerotierIp: string;
+  zerotierNodeId: string;
+  zerotierNetworkId: string;
+  publicKey: string;
+  endpoints: string[];
+  online: boolean;
+  lastSeenAt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface GuestDeviceCommand {
+  id: string;
+  type: 'switch_host' | 'force_disconnect';
+  targetAdminNodeId?: string;
+  targetAdminName?: string;
+  targetAdminPublicKey?: string;
+  issuedByAdminNodeId?: string;
+  issuedAt: number;
+}
+
 export interface GuestDeviceBinding {
   id: string;
   userId: number;
+  hostAdminNodeId: string;
+  hostAdminName: string;
+  handshakeStatus: HandshakeStatus;
+  pendingCommand?: GuestDeviceCommand | null;
   accountUsername: string;
   accountDisplayName: string;
   accountEnabled: boolean;
@@ -91,6 +127,7 @@ export interface AdminUserRow {
   modelOverrides: Record<string, boolean>;
   boundDevices?: GuestDeviceBinding[];
   deviceCount?: number;
+  autoApproveHandshake?: boolean;
 }
 
 export interface UsageLogRow {
@@ -149,6 +186,9 @@ export interface AdminOverview {
   upstreamConfigured: boolean;
   totalBoundDevices?: number;
   connectedDevices?: number;
+  totalAdminNodes?: number;
+  onlineAdminNodes?: number;
+  pendingHandshakes?: number;
 }
 
 export interface ClientModelEntry {
@@ -169,6 +209,7 @@ export interface ClientProfile {
     enabled: boolean;
     modelAccessMode: ModelAccessMode;
     createdAt: number;
+    autoApproveHandshake?: boolean;
   };
   api: {
     baseUrl: string;
@@ -179,6 +220,7 @@ export interface ClientProfile {
   recentUsage: UsageLogRow[];
   hostBinding?: HostBindingConfig | null;
   boundDevices?: GuestDeviceBinding[];
+  adminNodes?: AdminNodeInfo[];
   serverTime: number;
 }
 

@@ -1,9 +1,11 @@
+import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import express, { type Request, type Response } from 'express';
 import type {
   AdminOverview,
   AdminUserRow,
   GatewaySettings,
+  GuestDeviceCommand,
   ModelAccessMode,
   ModelEntry,
   UsageLogRow,
@@ -16,8 +18,15 @@ import {
   type DbUserRecord,
 } from '../db.js';
 import {
+  deleteAdminNode,
   deleteBoundDevice,
+  getAdminNodeById,
+  issueDeviceCommand,
+  listAdminNodes,
   listAllBoundDevices,
+  markDeviceDisconnected,
+  reviewHandshake,
+  upsertAdminNode,
   listBoundDevicesForUser,
   readHostBindingConfig,
   reassignDeviceAccount,
@@ -85,6 +94,7 @@ function buildAdminUserRow(
     modelOverrides: overridesMap,
     boundDevices,
     deviceCount: boundDevices.length,
+    autoApproveHandshake: Number(row.auto_approve_handshake) === 1,
   };
 }
 
@@ -92,6 +102,9 @@ function extractBearer(req: Request): string {
   const auth = req.headers.authorization;
   if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
     return auth.slice(7).trim();
+  }
+  if (typeof req.query?.token === 'string' && req.query.token.trim()) {
+    return req.query.token.trim();
   }
   return '';
 }
@@ -337,6 +350,16 @@ export function createAdminRouter(
       ),
       totalBoundDevices: Number(deviceCounts.total) || 0,
       connectedDevices: Number(deviceCounts.connected) || 0,
+      totalAdminNodes: listAdminNodes(db).length,
+      onlineAdminNodes: listAdminNodes(db).filter((n) => n.online).length,
+      pendingHandshakes:
+        Number(
+          (
+            db
+              .prepare("SELECT COUNT(*) AS c FROM guest_devices WHERE handshake_status = 'pending'")
+              .get() as { c: number }
+          ).c,
+        ) || 0,
     };
 
     res.json(overview);
@@ -432,6 +455,12 @@ export function createAdminRouter(
       );
 
     const createdId = Number(result.lastInsertRowid);
+    if (req.body?.autoApproveHandshake !== undefined) {
+      db.prepare('UPDATE users SET auto_approve_handshake = ? WHERE id = ?').run(
+        req.body.autoApproveHandshake ? 1 : 0,
+        createdId,
+      );
+    }
     if (
       req.body?.modelOverrides &&
       typeof req.body.modelOverrides === 'object'
@@ -537,6 +566,12 @@ export function createAdminRouter(
       now,
       id,
     );
+    if (req.body?.autoApproveHandshake !== undefined) {
+      db.prepare('UPDATE users SET auto_approve_handshake = ? WHERE id = ?').run(
+        req.body.autoApproveHandshake ? 1 : 0,
+        id,
+      );
+    }
 
     hubEvents.emitUserUpdated(id);
     const updated = db
@@ -1128,6 +1163,149 @@ export function createAdminRouter(
       hubEvents.emitUserUpdated(result.previousUserId);
     }
     res.json({ ok: true });
+  });
+
+
+  // --- Admin nodes: multiple machines logged into the single admin account auto-mesh ---
+  router.get('/nodes', (_req: Request, res: Response) => {
+    res.json({ nodes: listAdminNodes(db) });
+  });
+
+  router.post('/nodes/register', (req: Request, res: Response) => {
+    try {
+      const b = (req.body || {}) as Record<string, unknown>;
+      const node = upsertAdminNode(db, {
+        id: typeof b.id === 'string' ? b.id : undefined,
+        nodeName: typeof b.nodeName === 'string' ? b.nodeName : undefined,
+        hostname: typeof b.hostname === 'string' ? b.hostname : undefined,
+        os: typeof b.os === 'string' ? b.os : undefined,
+        sshUser: typeof b.sshUser === 'string' ? b.sshUser : undefined,
+        sshPort: b.sshPort !== undefined ? Number(b.sshPort) : undefined,
+        primaryIp: typeof b.primaryIp === 'string' ? b.primaryIp : undefined,
+        fallbackIp: typeof b.fallbackIp === 'string' ? b.fallbackIp : undefined,
+        zerotierIp: typeof b.zerotierIp === 'string' ? b.zerotierIp : undefined,
+        zerotierNodeId: typeof b.zerotierNodeId === 'string' ? b.zerotierNodeId : undefined,
+        zerotierNetworkId: typeof b.zerotierNetworkId === 'string' ? b.zerotierNetworkId : undefined,
+        publicKey: typeof b.publicKey === 'string' ? b.publicKey : undefined,
+        endpoints: Array.isArray(b.endpoints) ? (b.endpoints as unknown[]).map((x) => String(x || '')) : undefined,
+      });
+      hubEvents.emitAdminNodesUpdated();
+      res.json({ ok: true, node, nodes: listAdminNodes(db) });
+    } catch (err) {
+      const code = (err as { statusCode?: number }).statusCode || 400;
+      res.status(code).json({ error: err instanceof Error ? err.message : '注册管理员节点失败' });
+    }
+  });
+
+  router.delete('/nodes/:id', (req: Request, res: Response) => {
+    const nodeId = decodeURIComponent(String(req.params.id || '')).trim();
+    const deleted = deleteAdminNode(db, nodeId);
+    if (deleted) hubEvents.emitAdminNodesUpdated();
+    res.json({ ok: true, deleted });
+  });
+
+  router.get('/stream', (req: Request, res: Response) => {
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const snapshot = () => ({ nodes: listAdminNodes(db), devices: listAllBoundDevices(db) });
+    const push = (event: string) => {
+      if (res.writableEnded) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(snapshot())}\n\n`);
+    };
+    const onNodes = () => push('admin-nodes');
+    const onDevices = () => push('devices');
+    hubEvents.on('admin-nodes-updated', onNodes);
+    hubEvents.on('devices-updated', onDevices);
+
+    const keepalive = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 25_000);
+    keepalive.unref();
+
+    const cleanup = () => {
+      clearInterval(keepalive);
+      hubEvents.off('admin-nodes-updated', onNodes);
+      hubEvents.off('devices-updated', onDevices);
+    };
+    res.on('close', cleanup);
+    push('snapshot');
+  });
+
+  // --- Handshake review & remote commands ---
+  const reviewRoute = (action: 'approve' | 'reject') => (req: Request, res: Response) => {
+    const deviceId = decodeURIComponent(String(req.params.id || '')).trim();
+    try {
+      const dev = reviewHandshake(
+        db,
+        deviceId,
+        action,
+        typeof req.body?.adminNodeId === 'string' ? req.body.adminNodeId : undefined,
+      );
+      if (!dev) {
+        res.status(404).json({ error: '客机设备不存在' });
+        return;
+      }
+      hubEvents.emitUserUpdated(dev.userId);
+      hubEvents.emitDevicesUpdated();
+      res.json({ ok: true, device: dev });
+    } catch (err) {
+      const code = (err as { statusCode?: number }).statusCode || 400;
+      res.status(code).json({ error: err instanceof Error ? err.message : '操作失败' });
+    }
+  };
+  router.post('/devices/:id/approve', reviewRoute('approve'));
+  router.post('/devices/:id/reject', reviewRoute('reject'));
+
+  router.post('/devices/:id/switch-host', (req: Request, res: Response) => {
+    const deviceId = decodeURIComponent(String(req.params.id || '')).trim();
+    const targetId = String(req.body?.targetAdminNodeId || '').trim();
+    const target = targetId ? getAdminNodeById(db, targetId) : null;
+    if (!target) {
+      res.status(404).json({ error: '目标管理员主机不存在' });
+      return;
+    }
+    const command: GuestDeviceCommand = {
+      id: crypto.randomUUID(),
+      type: 'switch_host',
+      targetAdminNodeId: target.id,
+      targetAdminName: target.nodeName,
+      targetAdminPublicKey: target.publicKey,
+      issuedByAdminNodeId: typeof req.body?.issuedByAdminNodeId === 'string' ? req.body.issuedByAdminNodeId : undefined,
+      issuedAt: Date.now(),
+    };
+    const dev = issueDeviceCommand(db, deviceId, command);
+    if (!dev) {
+      res.status(404).json({ error: '客机设备不存在' });
+      return;
+    }
+    hubEvents.emitDeviceCommand(dev.userId, dev.id, command);
+    hubEvents.emitUserUpdated(dev.userId);
+    hubEvents.emitDevicesUpdated();
+    res.json({ ok: true, device: dev, command });
+  });
+
+  router.post('/devices/:id/force-disconnect', (req: Request, res: Response) => {
+    const deviceId = decodeURIComponent(String(req.params.id || '')).trim();
+    const disconnected = markDeviceDisconnected(db, deviceId);
+    if (!disconnected) {
+      res.status(404).json({ error: '客机设备不存在' });
+      return;
+    }
+    const command: GuestDeviceCommand = {
+      id: crypto.randomUUID(),
+      type: 'force_disconnect',
+      issuedByAdminNodeId: typeof req.body?.issuedByAdminNodeId === 'string' ? req.body.issuedByAdminNodeId : undefined,
+      issuedAt: Date.now(),
+    };
+    const dev = issueDeviceCommand(db, deviceId, command) || disconnected;
+    hubEvents.emitDeviceCommand(dev.userId, dev.id, command);
+    hubEvents.emitUserUpdated(dev.userId);
+    hubEvents.emitDevicesUpdated();
+    res.json({ ok: true, device: dev, command });
   });
 
   return router;

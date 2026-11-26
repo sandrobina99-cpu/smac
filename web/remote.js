@@ -25,6 +25,7 @@ const MAX_SESSIONS = 8;
 
 const sessions = new Set();
 let wss = null;
+let directOperableChecker = null;
 
 function available() {
   return Boolean(ssh2 && WebSocketServer);
@@ -84,6 +85,12 @@ function cleanDevice(raw) {
     accountDisplayName: String(raw.accountDisplayName || '').trim(),
     accountEnabled: raw.accountEnabled !== false,
     gatewayDeviceId: String(raw.gatewayDeviceId || '').trim(),
+    isAdminNode: Boolean(raw.isAdminNode),
+    adminNodeId: String(raw.adminNodeId || '').trim(),
+    hostAdminNodeId: String(raw.hostAdminNodeId || '').trim(),
+    hostAdminName: String(raw.hostAdminName || '').trim(),
+    handshakeStatus: ['pending', 'connected', 'rejected', 'disconnected'].includes(raw.handshakeStatus) ? raw.handshakeStatus : 'connected',
+    pendingCommand: raw.pendingCommand && typeof raw.pendingCommand === 'object' ? raw.pendingCommand : null,
     guestDisconnected: Boolean(raw.guestDisconnected),
     guestEnv: raw.guestEnv && typeof raw.guestEnv === 'object' ? raw.guestEnv : null,
     createdAt: raw.createdAt || nowIso(),
@@ -157,6 +164,12 @@ function publicDevice(device) {
     accountDisplayName: device.accountDisplayName || '',
     accountEnabled: device.accountEnabled !== false,
     gatewayDeviceId: device.gatewayDeviceId || '',
+    isAdminNode: Boolean(device.isAdminNode),
+    adminNodeId: device.adminNodeId || '',
+    hostAdminNodeId: device.hostAdminNodeId || '',
+    hostAdminName: device.hostAdminName || '',
+    handshakeStatus: device.handshakeStatus || 'connected',
+    pendingCommand: device.pendingCommand || null,
     guestDisconnected: Boolean(device.guestDisconnected),
     guestEnv: device.guestEnv || null,
     createdAt: device.createdAt,
@@ -176,9 +189,100 @@ function setDeviceAccountBinding(id, binding) {
   if (binding.accountEnabled !== undefined) target.accountEnabled = binding.accountEnabled !== false;
   if (binding.gatewayDeviceId !== undefined) target.gatewayDeviceId = String(binding.gatewayDeviceId || '').trim();
   if (binding.guestDisconnected !== undefined) target.guestDisconnected = Boolean(binding.guestDisconnected);
+  if (binding.hostAdminNodeId !== undefined) target.hostAdminNodeId = String(binding.hostAdminNodeId || '').trim();
+  if (binding.hostAdminName !== undefined) target.hostAdminName = String(binding.hostAdminName || '').trim();
+  if (binding.handshakeStatus !== undefined) {
+    target.handshakeStatus = ['pending', 'connected', 'rejected', 'disconnected'].includes(binding.handshakeStatus)
+      ? binding.handshakeStatus : 'connected';
+  }
+  if (binding.pendingCommand !== undefined) {
+    target.pendingCommand = binding.pendingCommand && typeof binding.pendingCommand === 'object' ? binding.pendingCommand : null;
+  }
+  if (binding.primaryIp) target.host = String(binding.primaryIp).trim();
+  if (binding.fallbackIp !== undefined) {
+    const fb = String(binding.fallbackIp || '').trim();
+    target.fallbackHost = fb && fb !== target.host ? fb : '';
+  }
+  if (binding.zerotierIp) target.zerotierIp = String(binding.zerotierIp).trim();
+  if (binding.sshUser) target.user = String(binding.sshUser).trim();
+  if (binding.sshPort) target.port = Number(binding.sshPort) || 22;
+  if (binding.os) target.os = String(binding.os).trim();
   target.updatedAt = nowIso();
   writeDevices(devices);
   return publicDevice(target);
+}
+
+function isDeviceDirectLocal(device, localAdminNodeId) {
+  if (!device) return false;
+  if (device.isAdminNode) return true;
+  if (!device.hostAdminNodeId) return true;
+  return Boolean(localAdminNodeId && device.hostAdminNodeId === localAdminNodeId);
+}
+
+function syncAdminPeers(localAdminNodeId, peers, keyPath) {
+  const devices = readDevices();
+  const nonAdmin = devices.filter(d => !d.isAdminNode);
+  const prevAdminByNodeId = new Map();
+  for (const d of devices) {
+    if (d.isAdminNode && d.adminNodeId) prevAdminByNodeId.set(d.adminNodeId, d);
+  }
+  const validPeers = (Array.isArray(peers) ? peers : []).filter(p =>
+    p && p.id && p.id !== localAdminNodeId && (p.primaryIp || p.fallbackIp || p.zerotierIp) && p.sshUser
+  );
+  const resolvedKey = expandHome(keyPath) || guessKeyPath();
+  const nextAdminIds = new Set();
+  const nextAdmins = [];
+
+  for (const peer of validPeers) {
+    nextAdminIds.add(peer.id);
+    const prev = prevAdminByNodeId.get(peer.id);
+    const host = String(peer.primaryIp || peer.fallbackIp || peer.zerotierIp || '').trim();
+    const fallbackHost = String(peer.fallbackIp && peer.fallbackIp !== host ? peer.fallbackIp : '').trim();
+    nextAdmins.push(cleanDevice({
+      id: prev ? prev.id : ('adm-peer-' + peer.id.replace(/[^a-zA-Z0-9_-]/g, '')),
+      name: String(peer.nodeName || peer.hostname || host).trim().slice(0, 38),
+      host,
+      fallbackHost,
+      port: Number(peer.sshPort) || 22,
+      user: String(peer.sshUser || '').trim(),
+      auth: 'key',
+      keyPath: resolvedKey,
+      password: '',
+      hostFingerprint: prev && prev.host === host && prev.port === (Number(peer.sshPort) || 22) ? prev.hostFingerprint : '',
+      os: String(peer.os || (prev && prev.os) || '').trim(),
+      zerotierNodeId: String(peer.zerotierNodeId || '').trim(),
+      zerotierIp: String(peer.zerotierIp || '').trim(),
+      zerotierNetworkId: String(peer.zerotierNetworkId || '').trim(),
+      isAdminNode: true,
+      adminNodeId: peer.id,
+      hostAdminNodeId: '',
+      hostAdminName: '',
+      handshakeStatus: 'connected',
+      pendingCommand: null,
+      guestDisconnected: peer.online === false,
+      guestEnv: prev ? prev.guestEnv : null,
+      createdAt: prev ? prev.createdAt : nowIso(),
+      updatedAt: nowIso(),
+      lastConnectedAt: prev ? prev.lastConnectedAt : '',
+      lastError: ''
+    }));
+  }
+
+  for (const [nodeId, prev] of prevAdminByNodeId.entries()) {
+    if (!nextAdminIds.has(nodeId)) {
+      disconnectDeviceSessions(prev.id);
+    }
+  }
+
+  const combined = [...nextAdmins, ...nonAdmin];
+  const sigOf = list => JSON.stringify(list.map(d => [
+    d.id, d.name, d.host, d.fallbackHost, d.port, d.user, d.os, d.zerotierIp,
+    d.isAdminNode, d.adminNodeId, d.guestDisconnected, d.keyPath
+  ]));
+  if (sigOf(combined) !== sigOf(devices)) {
+    writeDevices(combined);
+  }
+  return nextAdmins.map(publicDevice);
 }
 
 function disconnectDeviceSessions(id) {
@@ -274,6 +378,18 @@ function validateDeviceInput(body, existing) {
     zerotierIp,
     zerotierStatus: device.zerotierStatus || '',
     zerotierNetworkId: device.zerotierNetworkId || '',
+    accountId: device.accountId || 0,
+    accountUsername: device.accountUsername || '',
+    accountDisplayName: device.accountDisplayName || '',
+    accountEnabled: device.accountEnabled !== false,
+    gatewayDeviceId: device.gatewayDeviceId || '',
+    isAdminNode: Boolean(device.isAdminNode),
+    adminNodeId: device.adminNodeId || '',
+    hostAdminNodeId: device.hostAdminNodeId || '',
+    hostAdminName: device.hostAdminName || '',
+    handshakeStatus: device.handshakeStatus || 'connected',
+    pendingCommand: device.pendingCommand || null,
+    guestDisconnected: Boolean(device.guestDisconnected),
     guestEnv: device.guestEnv || null,
     createdAt: device.createdAt,
     updatedAt: nowIso(),
@@ -507,8 +623,9 @@ function isAllowedRequest(req, port) {
   return true;
 }
 
-function attachUpgrade(server, getPort) {
+function attachUpgrade(server, getPort, checkDirectOperable) {
   if (!available()) return false;
+  directOperableChecker = typeof checkDirectOperable === 'function' ? checkDirectOperable : null;
   if (!wss) {
     wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
     wss.on('connection', (ws, req) => handleConnection(ws, req));
@@ -541,6 +658,14 @@ function handleConnection(ws, req, url) {
     ws.send(JSON.stringify({ type: 'error', code: 'not-found', message: '设备不存在，可能已被删除' }));
     ws.close();
     return;
+  }
+  if (directOperableChecker) {
+    const deny = directOperableChecker(device);
+    if (deny) {
+      ws.send(JSON.stringify({ type: 'error', code: 'forbidden', message: deny }));
+      ws.close();
+      return;
+    }
   }
 
   const session = {
@@ -714,6 +839,8 @@ module.exports = {
   resetHostKey,
   testDevice,
   setDeviceAccountBinding,
+  isDeviceDirectLocal,
+  syncAdminPeers,
   disconnectDeviceSessions,
   attachUpgrade
 };

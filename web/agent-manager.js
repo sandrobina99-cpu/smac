@@ -86,6 +86,10 @@ function readDevices() {
     os: String(item.os || ''),
     jumpDeviceId: String(item.jumpDeviceId || ''),
     zerotierIp: String(item.zerotierIp || ''),
+    isAdminNode: Boolean(item.isAdminNode),
+    hostAdminNodeId: String(item.hostAdminNodeId || ''),
+    hostAdminName: String(item.hostAdminName || ''),
+    handshakeStatus: String(item.handshakeStatus || 'connected'),
     guestEnv: item.guestEnv && typeof item.guestEnv === 'object' ? item.guestEnv : null
   }));
 }
@@ -941,17 +945,27 @@ function publicState() {
   };
 }
 
-function optionsForDevice(deviceId) {
-  const devices = readDevices().map(device => ({
-    id: device.id,
-    name: device.name,
-    host: device.host,
-    auth: device.auth,
-    hasPassword: Boolean(device.password),
-    os: device.os || '',
-    pairCount: pairsForDevice(device.id).length,
-    guestEnv: device.guestEnv || null
-  }));
+function optionsForDevice(deviceId, localAdminNodeId) {
+  const devices = readDevices()
+    .filter(device => {
+      if (device.isAdminNode) return true;
+      if (localAdminNodeId && device.hostAdminNodeId && device.hostAdminNodeId !== localAdminNodeId) return false;
+      if (device.handshakeStatus === 'pending' || device.handshakeStatus === 'rejected') return false;
+      return true;
+    })
+    .map(device => ({
+      id: device.id,
+      name: device.name,
+      host: device.host,
+      auth: device.auth,
+      hasPassword: Boolean(device.password),
+      os: device.os || '',
+      isAdminNode: Boolean(device.isAdminNode),
+      hostAdminNodeId: device.hostAdminNodeId || '',
+      hostAdminName: device.hostAdminName || '',
+      pairCount: pairsForDevice(device.id).length,
+      guestEnv: device.guestEnv || null
+    }));
   const pairs = pairsForDevice(deviceId).map(pair => ({
     name: String(pair.name),
     remote: String(pair.remote || ''),

@@ -6,6 +6,8 @@
 (function () {
   const RS = {
     devices: [],
+    adminNodes: [],
+    localAdminNodeId: '',
     available: true,
     sessions: new Map(),
     active: '',
@@ -124,6 +126,8 @@
     try {
       const data = await api('/api/devices');
       RS.devices = Array.isArray(data.devices) ? data.devices : [];
+      RS.adminNodes = Array.isArray(data.adminNodes) ? data.adminNodes : [];
+      RS.localAdminNodeId = data.localAdminNodeId || '';
       RS.available = data.available !== false;
       RS.loaded = true;
       renderDevices();
@@ -132,6 +136,30 @@
       RS.available = false;
       renderDevices();
     }
+  }
+
+  function syncFromState(data) {
+    if (!data || !Array.isArray(data.devices)) return;
+    RS.devices = data.devices;
+    RS.adminNodes = Array.isArray(data.adminNodes) ? data.adminNodes : RS.adminNodes;
+    if (data.localAdminNodeId) RS.localAdminNodeId = data.localAdminNodeId;
+    RS.loaded = true;
+    renderDevices();
+  }
+
+  function isDirectLocal(device) {
+    if (!device) return false;
+    if (device.isAdminNode) return true;
+    if (!device.hostAdminNodeId) return true;
+    return Boolean(RS.localAdminNodeId && device.hostAdminNodeId === RS.localAdminNodeId);
+  }
+
+  function isDirectOperable(device) {
+    if (!device) return false;
+    if (device.isAdminNode) return true;
+    if (!isDirectLocal(device)) return false;
+    if (device.handshakeStatus === 'pending' || device.handshakeStatus === 'rejected') return false;
+    return true;
   }
 
   function sessionFor(deviceId) {
@@ -152,13 +180,60 @@
     return '<span class="tag os-tag" data-os="' + esc(os) + '">' + esc(os) + '</span>';
   }
 
+  function localAdminCardHtml() {
+    const selfNode = RS.adminNodes.find(n => n && n.id === RS.localAdminNodeId) || null;
+    const onlinePeers = RS.adminNodes.filter(n => n && n.id !== RS.localAdminNodeId && n.online).length;
+    const totalPeers = RS.adminNodes.filter(n => n && n.id !== RS.localAdminNodeId).length;
+    const osLabel = (selfNode && selfNode.os) || (navigator.platform && /mac/i.test(navigator.platform) ? 'macOS' : 'Windows');
+    const title = (selfNode && selfNode.nodeName) || '本机管理端';
+    const sub = selfNode
+      ? (esc(selfNode.sshUser || 'admin') + '@' + esc(selfNode.primaryIp || '127.0.0.1') + ':' + esc(selfNode.sshPort || 22))
+      : '尚未登录唯一管理员账号';
+    return '' +
+      '<article class="device-card is-admin-node is-local-self">' +
+        '<div class="device-top">' +
+          '<div class="device-avatar" data-os="' + esc(osLabel) + '">★</div>' +
+          '<div class="device-title">' +
+            '<h3>' + esc(title) + '（本机）</h3>' +
+            '<div class="device-sub"><code>' + sub + '</code></div>' +
+          '</div>' +
+          '<span class="badge" data-state="' + (selfNode ? 'ok' : 'off') + '">' + (selfNode ? '本机在线' : '未登录网关') + '</span>' +
+        '</div>' +
+        '<div class="device-tags">' +
+          '<span class="tag admin-node-tag">★ 管理员设备 · 本机</span>' +
+          osTag(osLabel) +
+          (selfNode && selfNode.fallbackIp ? '<span class="tag">备 · ' + esc(selfNode.fallbackIp) + '</span>' : '') +
+          (selfNode && selfNode.zerotierIp ? '<span class="tag zt-tag">ZT · ' + esc(selfNode.zerotierIp) + '</span>' : '') +
+        '</div>' +
+        '<div class="device-note">' + (selfNode
+          ? ('节点 ID ' + esc(RS.localAdminNodeId) + ' · 已自动互联其它 ' + totalPeers + ' 台管理员设备（' + onlinePeers + ' 台在线）')
+          : '前往「API 分发与账号」登录唯一管理员账号后，本机将自动注册并与其他管理员设备互联') + '</div>' +
+      '</article>';
+  }
+
   function cardHtml(device) {
     const status = deviceStatus(device);
     const connected = status === 'connected';
-    const isGuestDisc = !connected && status === 'idle' && Boolean(device.guestDisconnected);
-    const badgeState = connected ? 'ok' : (isGuestDisc ? 'bad' : (status === 'connecting' || status === 'fallback' || status === 'authenticated' || status === 'waiting-secret' ? 'warn' : (status === 'error' ? 'bad' : 'off')));
-    const badgeText = isGuestDisc ? '客机已断联' : (status === 'idle' ? '未连接' : (STATUS_TEXT[status] || '未连接'));
-    const avatar = (device.os === 'macOS' ? 'M' : (device.os === 'Windows' ? 'W' : (device.os === 'Linux' ? 'L' : esc((device.name || '?').slice(0, 1).toUpperCase()))));
+    const isAdmin = Boolean(device.isAdminNode);
+    const directLocal = isDirectLocal(device);
+    const operable = isDirectOperable(device);
+    const hs = device.handshakeStatus || 'connected';
+    const isPendingHere = !isAdmin && hs === 'pending' && directLocal;
+    const isPendingElsewhere = !isAdmin && hs === 'pending' && !directLocal;
+    const isGuestDisc = !connected && status === 'idle' && (Boolean(device.guestDisconnected) || hs === 'disconnected');
+
+    let badgeState = 'off';
+    let badgeText = '未连接';
+    if (connected) { badgeState = 'ok'; badgeText = '终端已连'; }
+    else if (isAdmin) { badgeState = isGuestDisc ? 'off' : 'ok'; badgeText = isGuestDisc ? '管理员离线' : '管理员在线'; }
+    else if (hs === 'pending') { badgeState = 'warn'; badgeText = isPendingHere ? '待本机批准' : '待对方批准'; }
+    else if (hs === 'rejected') { badgeState = 'bad'; badgeText = '握手已拒绝'; }
+    else if (isGuestDisc) { badgeState = 'bad'; badgeText = '客机已断联'; }
+    else if (status === 'connecting' || status === 'fallback' || status === 'authenticated' || status === 'waiting-secret') { badgeState = 'warn'; badgeText = STATUS_TEXT[status] || '连接中'; }
+    else if (status === 'error') { badgeState = 'bad'; badgeText = '连接失败'; }
+    else if (device.hostAdminNodeId) { badgeState = directLocal ? 'ok' : 'off'; badgeText = directLocal ? '本机直连' : '远端直连'; }
+
+    const avatar = isAdmin ? '★' : (device.os === 'macOS' ? 'M' : (device.os === 'Windows' ? 'W' : (device.os === 'Linux' ? 'L' : esc((device.name || '?').slice(0, 1).toUpperCase()))));
     const fingerprint = device.hostFingerprint
       ? '<span class="tag fp-tag" title="' + esc(device.hostFingerprint) + '">指纹已固定</span>'
       : '<span class="tag fp-tag pending" title="首次连接成功后会记录">首次连接记录指纹</span>';
@@ -171,14 +246,63 @@
     const savedPassword = device.auth === 'password' && device.hasPassword
       ? '<span class="tag" title="明文保存在本机，用于后台同步和发送">密码已保存</span>'
       : '';
-    const accountTag = device.accountUsername
-      ? '<span class="tag account-tag' + (device.accountEnabled === false ? ' bad' : '') + '" title="归属账号：' + esc((device.accountDisplayName || device.accountUsername) + ' (@' + device.accountUsername + ')') + '">' +
-          '所属账号 · ' + esc(device.accountDisplayName || device.accountUsername) + ' (@' + esc(device.accountUsername) + ')' + (device.accountEnabled === false ? ' [已禁用]' : '') +
-        '</span>'
-      : '<span class="tag account-tag unbound" title="尚未绑定到任何用户账号，点击下方「绑定账号」进行分配">未绑定账号</span>';
+
+    const roleOrAccountTag = isAdmin
+      ? '<span class="tag admin-node-tag">★ 管理员设备 · 自动互联</span>'
+      : (device.accountUsername
+        ? '<span class="tag account-tag' + (device.accountEnabled === false ? ' bad' : '') + '" title="归属账号：' + esc((device.accountDisplayName || device.accountUsername) + ' (@' + device.accountUsername + ')') + '">' +
+            '所属账号 · ' + esc(device.accountDisplayName || device.accountUsername) + ' (@' + esc(device.accountUsername) + ')' + (device.accountEnabled === false ? ' [已禁用]' : '') +
+          '</span>'
+        : '<span class="tag account-tag unbound" title="尚未绑定到任何用户账号，点击下方「绑定账号」进行分配">未绑定账号</span>');
+
+    const directHostTag = isAdmin
+      ? ''
+      : (device.hostAdminNodeId
+        ? (directLocal
+          ? '<span class="tag direct-host-tag local">直连主机 · 本机</span>'
+          : '<span class="tag direct-host-tag remote">由 ' + esc(device.hostAdminName || device.hostAdminNodeId) + ' 直连</span>')
+        : '<span class="tag direct-host-tag local">本机直连</span>');
+
+    const handshakeTag = !isAdmin && hs !== 'connected'
+      ? '<span class="tag handshake-tag ' + esc(hs) + '">' + (hs === 'pending' ? '等待握手确认' : (hs === 'rejected' ? '握手已拒绝' : '已断联')) + '</span>'
+      : '';
+
+    const pendingCmdHtml = device.pendingCommand
+      ? '<div class="device-note">指令下发中：' + (device.pendingCommand.type === 'switch_host'
+          ? ('请求改连至「' + esc(device.pendingCommand.targetAdminName || '目标主机') + '」')
+          : '强制断联') + '（客户端在线后自动执行）</div>'
+      : '';
+
+    const pendingBannerHtml = isPendingHere
+      ? '<div class="handshake-banner">' +
+          '<div class="handshake-banner-text"><b>握手申请待确认</b>：该客户端请求直连本机，批准后本机即可执行 SSH、文件同步、传桌面与 Agent 操作。</div>' +
+          '<div class="handshake-banner-actions">' +
+            '<button class="btn primary tiny" type="button" data-action="approve-handshake"><svg><use href="#i-check"/></svg>批准接入</button>' +
+            '<button class="btn ghost tiny danger" type="button" data-action="reject-handshake"><svg><use href="#i-x"/></svg>拒绝</button>' +
+          '</div>' +
+        '</div>'
+      : '';
+
+    const lockBarHtml = !isAdmin && !operable && !isPendingHere
+      ? '<div class="remote-lock-bar">' +
+          '<div class="remote-lock-text">' + (isPendingElsewhere
+            ? ('该客户端正在等待管理员设备「<b>' + esc(device.hostAdminName || device.hostAdminNodeId) + '</b>」批准握手。')
+            : (hs === 'rejected'
+              ? '该客户端握手已被拒绝；如需接入本机，可发起改连请求。'
+              : ('仅限直连主机「<b>' + esc(device.hostAdminName || device.hostAdminNodeId) + '</b>」执行 SSH、同步、传桌面与 Agent 操作。'))) +
+          '</div>' +
+          (device.gatewayDeviceId
+            ? '<div class="remote-lock-actions">' +
+                '<button class="btn primary tiny" type="button" data-action="switch-host">请求改连到本机</button>' +
+                '<button class="btn ghost tiny danger" type="button" data-action="force-disconnect">强制断联</button>' +
+              '</div>'
+            : '') +
+        '</div>'
+      : '';
+
     const last = device.lastConnectedAt
       ? '上次连接 ' + esc(relativeTime(device.lastConnectedAt))
-      : (device.lastError ? esc(device.lastError) : '尚未连接');
+      : (device.lastError ? esc(device.lastError) : (isAdmin ? '管理员多端自动互联通道已就绪' : '尚未连接'));
     const env = device.guestEnv && typeof device.guestEnv === 'object' ? device.guestEnv : null;
     const cliNames = env && Array.isArray(env.cli)
       ? env.cli.filter(x => x && x.installed).map(x => x.name)
@@ -195,10 +319,20 @@
             (cliNames.length ? cliNames.map(n => '<b>' + esc(n) + '</b>').join(' · ') : '<em>可自动安装</em>') +
           '</span></div>' +
         '</div>'
-      : '<div class="device-env-box empty"><span>尚未探测客机 CLI / Desktop 环境</span><button class="link-inline" type="button" data-action="detect-env">立即探测</button></div>';
+      : (operable
+        ? '<div class="device-env-box empty"><span>尚未探测 CLI / Desktop 环境</span><button class="link-inline" type="button" data-action="detect-env">立即探测</button></div>'
+        : '');
+
+    const lockAttr = operable ? '' : ' disabled title="仅限直连主机操作"';
+    const cardClasses = [
+      'device-card',
+      isAdmin ? 'is-admin-node' : '',
+      isPendingHere ? 'is-pending-handshake' : '',
+      (!isAdmin && !operable) ? 'is-remote-locked' : ''
+    ].filter(Boolean).join(' ');
 
     return '' +
-      '<article class="device-card" data-id="' + esc(device.id) + '" data-connected="' + (connected ? 'true' : 'false') + '">' +
+      '<article class="' + cardClasses + '" data-id="' + esc(device.id) + '" data-connected="' + (connected ? 'true' : 'false') + '">' +
         '<div class="device-top">' +
           '<div class="device-avatar" data-os="' + esc(device.os || '') + '">' + avatar + '</div>' +
           '<div class="device-title">' +
@@ -208,42 +342,57 @@
           '<span class="badge" data-state="' + badgeState + '">' + badgeText + '</span>' +
         '</div>' +
         '<div class="device-tags">' +
-          accountTag +
+          roleOrAccountTag +
+          directHostTag +
+          handshakeTag +
           osTag(device.os) +
           '<span class="tag"><svg><use href="#i-' + (device.auth === 'password' ? 'shield' : 'key') + '"/></svg>' + (device.auth === 'password' ? '密码' : '私钥') + '</span>' +
           savedPassword +
           ztTag +
           fallback + fingerprint +
         '</div>' +
+        pendingBannerHtml +
+        lockBarHtml +
+        pendingCmdHtml +
         envHtml +
         '<div class="device-note' + (device.lastError && !device.lastConnectedAt ? ' bad' : '') + '">' + last + '</div>' +
         '<div class="device-quick-row">' +
-          '<button class="btn ghost tiny" data-action="bind-account" title="为该客机分配或切换归属账号（支持同一账号下绑定多台客机）"><svg><use href="#i-shield"/></svg>' + (device.accountUsername ? '换绑账号' : '绑定账号') + '</button>' +
-          '<button class="btn ghost tiny" data-action="sync-add" title="由本机确定与该客机同步的文件夹"><svg><use href="#i-folder"/></svg>定同步目录</button>' +
-          '<button class="btn ghost tiny" data-action="send-desktop" title="发送文件或文件夹到该客机桌面"><svg><use href="#i-send"/></svg>发到客机桌面</button>' +
-          '<button class="btn ghost tiny" data-action="open-agent" title="后台无头复用该客机的 CLI 或桌面端订阅操作同步文件夹"><svg><use href="#i-server"/></svg>无头 Agent</button>' +
-          '<button class="btn ghost tiny" data-action="zt-join" title="远程检查/安装 ZeroTier 并加入当前穿透组，自动回填外网 IP"><svg><use href="#i-link"/></svg>同组 ZeroTier</button>' +
+          (!isAdmin ? '<button class="btn ghost tiny" data-action="bind-account" title="为该客机分配或切换归属账号（支持同一账号下绑定多台客机）"><svg><use href="#i-shield"/></svg>' + (device.accountUsername ? '换绑账号' : '绑定账号') + '</button>' : '') +
+          '<button class="btn ghost tiny" data-action="sync-add"' + lockAttr + '><svg><use href="#i-folder"/></svg>定同步目录</button>' +
+          '<button class="btn ghost tiny" data-action="send-desktop"' + lockAttr + '><svg><use href="#i-send"/></svg>发到桌面</button>' +
+          '<button class="btn ghost tiny" data-action="open-agent"' + lockAttr + '><svg><use href="#i-server"/></svg>无头 Agent</button>' +
+          '<button class="btn ghost tiny" data-action="zt-join"' + lockAttr + '><svg><use href="#i-link"/></svg>同组 ZeroTier</button>' +
+          (!isAdmin && operable && device.gatewayDeviceId ? '<button class="btn ghost tiny danger" data-action="force-disconnect" title="下发强制断联指令，撤销该客机对本机的 SSH 授权">强制断联</button>' : '') +
         '</div>' +
         '<div class="device-actions">' +
-          '<button class="btn primary small" data-action="connect"><svg><use href="#i-terminal"/></svg>' + (connected ? '打开终端' : 'SSH 终端') + '</button>' +
-          '<button class="btn ghost small" data-action="install-tools" title="选择并远程给该客机安装 CLI 与 Desktop（官方默认目录）">装软件</button>' +
-          '<button class="btn ghost small" data-action="detect-env" title="检测客机本地 CLI 与 Desktop 环境">探环境</button>' +
-          '<button class="btn ghost small" data-action="test">测试</button>' +
-          '<button class="btn ghost small" data-action="edit">编辑</button>' +
-          '<button class="btn ghost small icon" data-action="delete" title="删除设备"><svg><use href="#i-trash"/></svg></button>' +
+          '<button class="btn primary small" data-action="connect"' + lockAttr + '><svg><use href="#i-terminal"/></svg>' + (connected ? '打开终端' : 'SSH 终端') + '</button>' +
+          '<button class="btn ghost small" data-action="install-tools"' + lockAttr + '>装软件</button>' +
+          '<button class="btn ghost small" data-action="detect-env"' + lockAttr + '>探环境</button>' +
+          '<button class="btn ghost small" data-action="test"' + lockAttr + '>测试</button>' +
+          (!isAdmin ? '<button class="btn ghost small" data-action="edit">编辑</button>' : '') +
+          (!isAdmin ? '<button class="btn ghost small icon" data-action="delete" title="删除设备"><svg><use href="#i-trash"/></svg></button>' : '') +
         '</div>' +
       '</article>';
   }
 
   function renderDevices() {
+    const adminGrid = $('#adminDeviceGrid');
     const grid = $('#deviceGrid');
     const empty = $('#deviceEmpty');
     const notice = $('#remoteUnavailable');
     if (!grid || !empty) return;
     if (notice) notice.hidden = RS.available;
-    grid.innerHTML = RS.devices.map(cardHtml).join('');
-    grid.hidden = RS.devices.length === 0;
-    empty.hidden = RS.devices.length > 0;
+
+    const adminPeers = RS.devices.filter(d => d && d.isAdminNode);
+    const clientDevs = RS.devices.filter(d => d && !d.isAdminNode);
+
+    if (adminGrid) {
+      adminGrid.innerHTML = localAdminCardHtml() + adminPeers.map(cardHtml).join('');
+    }
+    grid.innerHTML = clientDevs.map(cardHtml).join('');
+    grid.hidden = clientDevs.length === 0;
+    empty.hidden = clientDevs.length > 0;
+    updateSessionCount();
   }
 
   // ---------- 会话与终端 ----------
@@ -384,7 +533,7 @@
     const dot = session.tab.querySelector('.term-tab-dot');
     if (dot) dot.dataset.state = STATUS_DOT[status] || 'off';
     const connected = status === 'connected';
-    const card = $('#deviceGrid').querySelector('.device-card[data-id="' + session.device.id + '"]');
+    const card = document.querySelector('.device-card[data-id="' + session.device.id + '"]');
     if (card) card.dataset.connected = connected ? 'true' : 'false';
     updateSessionCount();
     renderDevices();
@@ -401,10 +550,12 @@
 
   function updateSessionCount() {
     const count = RS.sessions.size;
+    const pendingCount = RS.devices.filter(d => d && !d.isAdminNode && d.handshakeStatus === 'pending' && isDirectLocal(d)).length;
     const badge = $('#remoteCount');
     if (badge) {
-      badge.textContent = String(count);
-      badge.hidden = count === 0;
+      const total = pendingCount || count;
+      badge.textContent = pendingCount ? (pendingCount + '待审') : String(count);
+      badge.hidden = total === 0;
     }
     const dock = $('#termDock');
     const dockText = $('#termDockText');
@@ -1017,14 +1168,69 @@
       });
     }
 
-    $('#deviceGrid').addEventListener('click', event => {
+    if ($('#btnSyncTopology')) {
+      $('#btnSyncTopology').addEventListener('click', async () => {
+        try {
+          await post('/api/hub/sync-topology', {});
+          await loadDevices();
+          notify('全网管理员节点与客户端拓扑已同步', 'ok', 2200);
+        } catch (err) {
+          notify(err.message || '同步全网拓扑失败', 'error');
+        }
+      });
+    }
+
+    const handleGridClick = async event => {
       const actionEl = event.target.closest('[data-action]');
-      if (!actionEl) return;
+      if (!actionEl || actionEl.disabled) return;
       const card = event.target.closest('.device-card');
-      if (!card) return;
+      if (!card || !card.dataset.id) return;
       const device = RS.devices.find(item => item.id === card.dataset.id);
       if (!device) return;
       const action = actionEl.dataset.action;
+
+      if (action === 'approve-handshake') {
+        try {
+          await post('/api/hub/devices/approve', { deviceId: device.id });
+          notify('已批准「' + device.name + '」接入本机，现在可建立 SSH / 同步 / Agent 操作', 'ok', 4200);
+          await loadDevices();
+          if (window.SmacHub) window.SmacHub.refreshDashboard();
+        } catch (err) { notify(err.message, 'error'); }
+        return;
+      }
+      if (action === 'reject-handshake') {
+        try {
+          await post('/api/hub/devices/reject', { deviceId: device.id });
+          notify('已拒绝「' + device.name + '」的握手请求', 'warn');
+          await loadDevices();
+          if (window.SmacHub) window.SmacHub.refreshDashboard();
+        } catch (err) { notify(err.message, 'error'); }
+        return;
+      }
+      if (action === 'switch-host') {
+        const ok = await ask('请求改连到本机', '将向客户端 <b>' + esc(device.name) + '</b> 下发改连指令：自动撤销原主机「' + esc(device.hostAdminName || '原主机') + '」的 SSH 授权并改连到本机，确认发送？', '下发改连');
+        if (!ok) return;
+        try {
+          await post('/api/hub/devices/switch-host', { deviceId: device.id });
+          notify('已向「' + device.name + '」下发改连到本机指令，客户端在线时会自动切换直连', 'ok', 4500);
+          await loadDevices();
+        } catch (err) { notify(err.message, 'error'); }
+        return;
+      }
+      if (action === 'force-disconnect') {
+        const ok = await ask('强制断联客户端', '将向客户端 <b>' + esc(device.name) + '</b> 下发强制断联指令并撤销其 SSH 授权，确认执行？', '强制断联');
+        if (!ok) return;
+        try {
+          await post('/api/hub/devices/force-disconnect', { deviceId: device.id });
+          const s = sessionFor(device.id);
+          if (s) closeSession(s);
+          notify('已下发强制断联指令', 'warn', 3500);
+          await loadDevices();
+          if (window.SmacHub) window.SmacHub.refreshDashboard();
+        } catch (err) { notify(err.message, 'error'); }
+        return;
+      }
+
       if (action === 'connect') connectDevice(device);
       else if (action === 'test') testDevice(device);
       else if (action === 'edit') openDeviceModal(device);
@@ -1052,7 +1258,10 @@
       } else if (action === 'zt-join') {
         remoteJoinZeroTier(device);
       }
-    });
+    };
+
+    $('#deviceGrid').addEventListener('click', handleGridClick);
+    if ($('#adminDeviceGrid')) $('#adminDeviceGrid').addEventListener('click', handleGridClick);
 
     $('#btnSaveDevice').addEventListener('click', saveDevice);
     $('#btnPickKey').addEventListener('click', pickKey);
@@ -1109,6 +1318,7 @@
     init,
     activate,
     loadDevices,
+    syncFromState,
     loadZeroTier,
     sessionCount: () => RS.sessions.size
   };

@@ -6,6 +6,7 @@ packages/*/dist/
 apps/*/dist/
 apps/*/dist-electron/
 apps/*/release/
+apps/admin-desktop/runtime/
 enable-ssh/
 
 # Gateway Secrets & Local SQLite Data

@@ -3,9 +3,11 @@ import path from 'node:path';
 import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
 import { applyAgent, detectAgents, restoreAgent, revealAgentConfig, type ApplyInput } from './agents';
 import {
+  connectLocalToAdminNode,
   connectLocalToHost,
   disconnectLocalFromHost,
   getGuestLocalStatus,
+  type AdminNodePayload,
   type HostBindingPayload,
 } from './guest-bridge';
 import { registerUpdater } from './updater';
@@ -18,7 +20,7 @@ export interface ClientDesktopConfig {
 
 const DEFAULT_CONFIG: ClientDesktopConfig = {
   serverUrl: 'https://hub.sandrobina.me',
-  theme: 'system',
+  theme: 'dark',
   lastUsername: '',
 };
 
@@ -50,13 +52,13 @@ function writeConfig(patch: Partial<ClientDesktopConfig>): ClientDesktopConfig {
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 1120,
-    height: 780,
-    minWidth: 840,
-    minHeight: 600,
+    width: 1260,
+    height: 840,
+    minWidth: 920,
+    minHeight: 620,
     title: 'smac 客户端',
     icon: path.join(__dirname, '../build/icon.png'),
-    backgroundColor: '#071316',
+    backgroundColor: '#05070e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -118,6 +120,11 @@ app.whenReady().then(() => {
     'guest:connect',
     (_event, hostBinding: HostBindingPayload, deviceName?: string) =>
       connectLocalToHost(hostBinding, deviceName ? String(deviceName) : undefined),
+  );
+  ipcMain.handle(
+    'guest:connect-node',
+    (_event, adminNode: AdminNodePayload, deviceName?: string) =>
+      connectLocalToAdminNode(adminNode, deviceName ? String(deviceName) : undefined),
   );
   ipcMain.handle('guest:disconnect', (_event, hostPublicKey?: string) =>
     disconnectLocalFromHost(hostPublicKey ? String(hostPublicKey) : undefined),

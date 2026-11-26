@@ -3,10 +3,13 @@ import express, { type Request, type Response } from 'express';
 import type { ClientProfile, UsageLogRow } from '@sandrobina/shared';
 import { getSetting, type DbUserRecord } from '../db.js';
 import {
+  ackDeviceCommand,
   deleteBoundDevice,
+  listAdminNodes,
   listBoundDevicesForUser,
   markDeviceDisconnected,
   readHostBindingConfig,
+  requestClientHandshake,
   upsertBoundDevice,
 } from '../devices.js';
 import { hubEvents } from '../events.js';
@@ -117,6 +120,7 @@ export function buildClientProfile(
       enabled: user.enabled === 1,
       modelAccessMode: user.model_access_mode,
       createdAt: Number(user.created_at),
+      autoApproveHandshake: Number(user.auto_approve_handshake) === 1,
     },
     api: {
       baseUrl: resolvePublicBaseUrl(db, req),
@@ -135,6 +139,7 @@ export function buildClientProfile(
     recentUsage,
     hostBinding,
     boundDevices,
+    adminNodes: listAdminNodes(db),
     serverTime: now,
   };
 }
@@ -371,6 +376,52 @@ export function createClientRouter(
     res.json({ ok: true, devices: listBoundDevicesForUser(db, user) });
   });
 
+
+  router.post('/devices/handshake', (req: ClientRequest, res: Response) => {
+    const user = req.clientUser!;
+    const b = (req.body || {}) as Record<string, unknown>;
+    try {
+      const device = requestClientHandshake(db, user, {
+        targetAdminNodeId: typeof b.targetAdminNodeId === 'string' ? b.targetAdminNodeId : undefined,
+        id: typeof b.id === 'string' ? b.id : typeof b.deviceId === 'string' ? b.deviceId : undefined,
+        deviceName: typeof b.deviceName === 'string' ? b.deviceName : undefined,
+        hostname: typeof b.hostname === 'string' ? b.hostname : undefined,
+        os: typeof b.os === 'string' ? b.os : undefined,
+        sshUser: typeof b.sshUser === 'string' ? b.sshUser : undefined,
+        sshPort: b.sshPort !== undefined ? Number(b.sshPort) : undefined,
+        primaryIp: typeof b.primaryIp === 'string' ? b.primaryIp : undefined,
+        fallbackIp: typeof b.fallbackIp === 'string' ? b.fallbackIp : undefined,
+        zerotierIp: typeof b.zerotierIp === 'string' ? b.zerotierIp : undefined,
+        zerotierNodeId: typeof b.zerotierNodeId === 'string' ? b.zerotierNodeId : undefined,
+        zerotierNetworkId: typeof b.zerotierNetworkId === 'string' ? b.zerotierNetworkId : undefined,
+        env: b.env && typeof b.env === 'object' ? (b.env as Record<string, unknown>) : undefined,
+      });
+      hubEvents.emitUserUpdated(user.id);
+      hubEvents.emitDevicesUpdated();
+      res.json({ ok: true, device, devices: listBoundDevicesForUser(db, user) });
+    } catch (err) {
+      const code = (err as { statusCode?: number }).statusCode || 400;
+      res.status(code).json({ error: err instanceof Error ? err.message : '握手请求失败' });
+    }
+  });
+
+  router.post('/devices/:id/ack-command', (req: ClientRequest, res: Response) => {
+    const user = req.clientUser!;
+    const deviceId = decodeURIComponent(String(req.params.id || '')).trim();
+    const updated = ackDeviceCommand(db, deviceId, user.id, {
+      commandId: String(req.body?.commandId || ''),
+      status: req.body?.status === 'failed' ? 'failed' : 'applied',
+      hostAdminNodeId: typeof req.body?.hostAdminNodeId === 'string' ? req.body.hostAdminNodeId : undefined,
+    });
+    if (!updated) {
+      res.status(404).json({ error: '当前账号下未找到该客机设备' });
+      return;
+    }
+    hubEvents.emitUserUpdated(user.id);
+    hubEvents.emitDevicesUpdated();
+    res.json({ ok: true, device: updated, devices: listBoundDevicesForUser(db, user) });
+  });
+
   router.get('/stream', (req: ClientRequest, res: Response) => {
     const initialUser = req.clientUser!;
     const expectedTv = initialUser.token_version;
@@ -414,6 +465,15 @@ export function createClientRouter(
 
     hubEvents.on('user-updated', onUserUpdated);
     hubEvents.on('models-updated', onModelsUpdated);
+    const onAdminNodes = () => pushCurrentProfile();
+    const onDeviceCommand = (payload: { userId: number; deviceId: string; command: unknown }) => {
+      if (payload.userId !== initialUser.id || res.writableEnded) return;
+      res.write(
+        `event: command\ndata: ${JSON.stringify({ deviceId: payload.deviceId, command: payload.command })}\n\n`,
+      );
+    };
+    hubEvents.on('admin-nodes-updated', onAdminNodes);
+    hubEvents.on('device-command', onDeviceCommand);
 
     const keepaliveTimer = setInterval(() => {
       if (!res.writableEnded) {
@@ -433,6 +493,8 @@ export function createClientRouter(
       clearInterval(rollingRefreshTimer);
       hubEvents.off('user-updated', onUserUpdated);
       hubEvents.off('models-updated', onModelsUpdated);
+      hubEvents.off('admin-nodes-updated', onAdminNodes);
+      hubEvents.off('device-command', onDeviceCommand);
     };
 
     res.on('close', cleanup);

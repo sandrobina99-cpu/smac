@@ -16,6 +16,29 @@ const zerotier = require('./zerotier');
 const guestInstaller = require('./guest-installer');
 const clipboardSync = require('./clipboard-sync');
 const apiHubBridge = require('./api-hub-bridge');
+const adminMesh = require('./admin-mesh');
+
+function directOperableError(device) {
+  if (!device) return null;
+  if (device.isAdminNode) return null;
+  const localId = adminMesh.getLocalAdminNodeId();
+  if (device.hostAdminNodeId && device.hostAdminNodeId !== localId) {
+    return '该客户端由管理员设备「' + (device.hostAdminName || device.hostAdminNodeId) + '」直连，仅限直连主机操作；可先在全局网络中点击「请求改连到本机」切换直连归属';
+  }
+  if (device.handshakeStatus === 'pending') {
+    return '该客户端正在等待本机批准握手，请先在「全局网络 · 设备」点击「批准接入」';
+  }
+  if (device.handshakeStatus === 'rejected') {
+    return '该客户端的握手请求已被拒绝，无法建立操作连接';
+  }
+  return null;
+}
+
+function checkDirectDeviceById(deviceId) {
+  if (!deviceId) return null;
+  const dev = remote.listDevices().find(item => item.id === deviceId);
+  return dev ? directOperableError(dev) : null;
+}
 
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
@@ -422,6 +445,8 @@ async function buildState() {
     },
     status,
     pairs,
+    localAdminNodeId: adminMesh.getLocalAdminNodeId(),
+    adminNodes: apiHubBridge.getAdminNodes(),
     devices: deviceList,
     connectivity,
     agent: agent.publicState(),
@@ -546,6 +571,8 @@ async function handleApi(req, res, url) {
     if (deviceId) {
       const device = remote.listDevices().find(item => item.id === deviceId);
       if (!device) { sendJson(res, 400, { ok: false, output: '远程设备不存在，可能已被删除' }); return; }
+      const denyMsg = directOperableError(device);
+      if (denyMsg) { sendJson(res, 403, { ok: false, output: denyMsg }); return; }
       if (device.auth === 'password' && !device.hasPassword) {
         sendJson(res, 400, { ok: false, output: '该设备还没有保存密码，请先在“远程设备”里编辑并保存密码，后台同步才能自动连接' });
         return;
@@ -662,7 +689,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && route === '/api/config') {
     const body = await readBody(req);
     if (Array.isArray(body.clipboardDeviceIds)) {
-      const validIds = new Set(remote.listDevices().map(d => d.id));
+      const validIds = new Set(remote.listDevices().filter(d => !directOperableError(d)).map(d => d.id));
       const ids = Array.from(new Set(body.clipboardDeviceIds.map(v => String(v || '').trim()).filter(id => validIds.has(id))));
       const result = hostEngine.setConfigValue('clipboardDeviceIds', ids);
       sendJson(res, result.ok ? 200 : 400, Object.assign({ deviceIds: ids }, result));
@@ -716,7 +743,13 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && route === '/api/devices') {
     try {
-      sendJson(res, 200, { ok: true, available: remote.available(), devices: remote.listDevices() });
+      sendJson(res, 200, {
+        ok: true,
+        available: remote.available(),
+        localAdminNodeId: adminMesh.getLocalAdminNodeId(),
+        adminNodes: apiHubBridge.getAdminNodes(),
+        devices: remote.listDevices()
+      });
     } catch (error) {
       sendJson(res, 500, { ok: false, available: remote.available(), devices: [], output: String(error && error.message ? error.message : error) });
     }
@@ -760,6 +793,8 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'POST' && route === '/api/devices/test') {
     const body = await readBody(req);
+    const denyMsg = checkDirectDeviceById(String(body.id || ''));
+    if (denyMsg) { sendJson(res, 403, { ok: false, code: 'forbidden', message: denyMsg, output: denyMsg }); return; }
     try {
       const result = await remote.testDevice(String(body.id || ''), {
         password: typeof body.password === 'string' ? body.password : '',
@@ -821,6 +856,8 @@ async function handleApi(req, res, url) {
     try {
       const deviceId = String(body.deviceId || '').trim();
       if (!deviceId) { sendJson(res, 400, { ok: false, error: '缺少目标设备 ID' }); return; }
+      const denyMsg = checkDirectDeviceById(deviceId);
+      if (denyMsg) { sendJson(res, 403, { ok: false, error: denyMsg }); return; }
       const result = await zerotier.remoteJoinDevice(deviceId, String(body.networkId || '').trim(), {
         autoInstall: body.autoInstall !== false,
         preferZerotier: Boolean(body.preferZerotier)
@@ -881,6 +918,8 @@ async function handleApi(req, res, url) {
     if (deviceId) {
       device = remote.listDevices().find(item => item.id === deviceId) || null;
       if (!device) { sendJson(res, 400, { ok: false, output: '远程设备不存在，可能已被删除' }); return; }
+      const denyMsg = directOperableError(device);
+      if (denyMsg) { sendJson(res, 403, { ok: false, output: denyMsg }); return; }
       if (device.auth === 'password' && !device.hasPassword) {
         sendJson(res, 400, { ok: false, output: '该设备还没有保存密码，请先在“远程设备”里编辑并保存密码' });
         return;
@@ -973,6 +1012,12 @@ async function handleApi(req, res, url) {
       if (!device) {
         try { fs.rmSync(batchDir, { recursive: true, force: true }); } catch { }
         sendJson(res, 400, { ok: false, output: '远程设备不存在，可能已被删除' });
+        return;
+      }
+      const denyMsg = directOperableError(device);
+      if (denyMsg) {
+        try { fs.rmSync(batchDir, { recursive: true, force: true }); } catch { }
+        sendJson(res, 403, { ok: false, output: denyMsg });
         return;
       }
       if (device.auth === 'password' && !device.hasPassword) {
@@ -1091,6 +1136,8 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && route === '/api/remote-list') {
     const body = await readBody(req);
     const deviceId = String(body.device || '').trim();
+    const denyMsg = checkDirectDeviceById(deviceId);
+    if (denyMsg) { sendJson(res, 403, { ok: false, output: denyMsg }); return; }
     if (IS_WIN && !deviceId && !hasLegacyMacConfig(readJsonSafe(CONFIG_FILE))) {
       sendJson(res, 400, { ok: false, output: '请先在「远程设备 · 客机」添加目标设备' });
       return;
@@ -1109,12 +1156,14 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && route === '/api/agent/options') {
     const deviceId = String(url.searchParams.get('deviceId') || '').trim();
-    sendJson(res, 200, agent.optionsForDevice(deviceId));
+    sendJson(res, 200, agent.optionsForDevice(deviceId, adminMesh.getLocalAdminNodeId()));
     return;
   }
 
   if (req.method === 'GET' && route === '/api/agent/models') {
     const deviceId = String(url.searchParams.get('deviceId') || '').trim();
+    const denyMsg = checkDirectDeviceById(deviceId);
+    if (denyMsg) { sendJson(res, 403, { ok: false, error: denyMsg, providers: [] }); return; }
     const raw = String(url.searchParams.get('backend') || '').trim().toLowerCase();
     const backend = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'opencode'].includes(raw) ? raw : 'hermes';
     try {
@@ -1128,6 +1177,8 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && route === '/api/agent/env') {
     const deviceId = String(url.searchParams.get('deviceId') || '').trim();
+    const denyMsg = checkDirectDeviceById(deviceId);
+    if (denyMsg) { sendJson(res, 403, { ok: false, error: denyMsg }); return; }
     const force = url.searchParams.get('force') === '1';
     try {
       const env = await agent.detectEnvForDevice(deviceId, force);
@@ -1148,6 +1199,8 @@ async function handleApi(req, res, url) {
     try {
       const deviceId = String(body.deviceId || '').trim();
       if (!deviceId) { sendJson(res, 400, { ok: false, error: '缺少目标客机 ID' }); return; }
+      const denyMsg = checkDirectDeviceById(deviceId);
+      if (denyMsg) { sendJson(res, 403, { ok: false, error: denyMsg }); return; }
       const result = await guestInstaller.installOnDevice(deviceId, Array.isArray(body.items) ? body.items : []);
       stateCache.clear();
       sendJson(res, 200, result);
@@ -1195,13 +1248,18 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && route === '/api/hub/logout') {
-    sendJson(res, 200, apiHubBridge.logoutAdmin());
+    sendJson(res, 200, await apiHubBridge.logoutAdmin());
     return;
   }
 
   if (req.method === 'POST' && route === '/api/hub/sync-host-binding') {
     try {
-      sendJson(res, 200, await apiHubBridge.syncHostBindingToGateway());
+      const [hbRes] = await Promise.all([
+        apiHubBridge.syncHostBindingToGateway(),
+        apiHubBridge.registerLocalAdminNode().catch(() => null)
+      ]);
+      await apiHubBridge.syncFullTopology().catch(() => null);
+      sendJson(res, 200, hbRes);
     } catch (error) {
       sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
     }
@@ -1211,6 +1269,65 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && route === '/api/hub/sync-devices') {
     try {
       const r = await apiHubBridge.syncGatewayDevicesToLocal();
+      stateCache.clear();
+      sendJson(res, 200, r);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/sync-topology') {
+    try {
+      const r = await apiHubBridge.syncFullTopology();
+      stateCache.clear();
+      sendJson(res, 200, r);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/devices/approve') {
+    const body = await readBody(req);
+    try {
+      const r = await apiHubBridge.approveHandshake(String(body.deviceId || '').trim());
+      stateCache.clear();
+      sendJson(res, 200, r);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/devices/reject') {
+    const body = await readBody(req);
+    try {
+      const r = await apiHubBridge.rejectHandshake(String(body.deviceId || '').trim());
+      stateCache.clear();
+      sendJson(res, 200, r);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/devices/switch-host') {
+    const body = await readBody(req);
+    try {
+      const r = await apiHubBridge.switchClientHost(String(body.deviceId || '').trim());
+      stateCache.clear();
+      sendJson(res, 200, r);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/devices/force-disconnect') {
+    const body = await readBody(req);
+    try {
+      const r = await apiHubBridge.forceDisconnectClient(String(body.deviceId || '').trim());
       stateCache.clear();
       sendJson(res, 200, r);
     } catch (error) {
@@ -1298,6 +1415,8 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'POST' && route === '/api/agent/start') {
     const body = await readBody(req);
+    const denyMsg = checkDirectDeviceById(String(body.deviceId || '').trim());
+    if (denyMsg) { sendJson(res, 403, { ok: false, error: denyMsg }); return; }
     try {
       const state = await agent.start({
         deviceId: String(body.deviceId || '').trim(),
@@ -1357,7 +1476,7 @@ try {
 }
 
 try {
-  if (!remote.attachUpgrade(server, () => PORT)) {
+  if (!remote.attachUpgrade(server, () => PORT, directOperableError)) {
     console.warn('远程终端组件缺失：请在 web 目录执行 npm install');
   }
 } catch (error) {
@@ -1447,7 +1566,12 @@ server.on('listening', () => {
   } catch { }
   const url = 'http://' + BIND + ':' + PORT + '/';
   console.log('smac web console: ' + url);
-  if (process.argv.includes('--open')) {
+  apiHubBridge.setChangeListener(() => {
+    stateCache.clear();
+    connCache.at = 0;
+  });
+  apiHubBridge.startIfLoggedIn();
+  if (process.argv.includes('--open') && process.env.SMAC_ELECTRON_HOST !== '1') {
     openStandaloneWindow(url);
   }
   // 仅当存在 bootstrap-peer.json 或已配置设备时才在启动时自动识别同步目录；
@@ -1485,6 +1609,7 @@ function shutdown() {
   };
   const timer = setTimeout(finish, 3500);
   timer.unref();
+  try { apiHubBridge.stopAdminMesh(); } catch { }
   Promise.resolve()
     .then(() => agent.stop())
     .catch(() => { })

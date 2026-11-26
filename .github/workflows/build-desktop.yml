@@ -58,7 +58,7 @@ jobs:
           path: |
             apps/admin-desktop/release/*.dmg
             apps/admin-desktop/release/*.zip
-            apps/admin-desktop/release/*.exe
+            apps/admin-desktop/release/*-win-setup.exe
           if-no-files-found: error
 
       - name: Upload Client Desktop artifacts
@@ -68,5 +68,5 @@ jobs:
           path: |
             apps/client-desktop/release/*.dmg
             apps/client-desktop/release/*.zip
-            apps/client-desktop/release/*.exe
+            apps/client-desktop/release/*-win-setup.exe
           if-no-files-found: error

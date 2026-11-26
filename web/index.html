@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0f19">
-<title>smac · 文件中枢与远程终端</title>
+<title>smac 管理端 · 文件中枢 · 全局网络 · API 分发</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 </head>
@@ -47,17 +47,20 @@
   <div class="brand">
     <div class="logo"><svg><use href="#i-swap"/></svg></div>
     <div class="brand-text">
-      <div class="brand-name">smac<span>console</span></div>
-      <div class="brand-sub">文件中枢 · 远程终端 · API 分发与账号管理</div>
+      <div class="brand-name">smac<span>管理端</span></div>
+      <div class="brand-sub">文件中枢 · 全局网络 · 远程 Agent · API 分发</div>
     </div>
   </div>
   <nav class="view-switch" id="viewSwitch" aria-label="视图切换">
     <button class="view-btn active" data-view="files"><svg><use href="#i-folder"/></svg><span class="view-label">文件中枢</span></button>
-    <button class="view-btn" data-view="remote"><svg><use href="#i-terminal"/></svg><span class="view-label">远程设备 · 客机</span><span class="nav-count" id="remoteCount" hidden>0</span></button>
+    <button class="view-btn" data-view="remote"><svg><use href="#i-terminal"/></svg><span class="view-label">全局网络 · 设备</span><span class="nav-count" id="remoteCount" hidden>0</span></button>
     <button class="view-btn" data-view="agent"><svg><use href="#i-server"/></svg><span class="view-label">远程 Agent</span><span class="nav-count" id="agentCount" hidden>0</span></button>
     <button class="view-btn" data-view="hub"><svg><use href="#i-key"/></svg><span class="view-label">API 分发与账号</span></button>
   </nav>
   <div class="top-chips">
+    <button class="chip chip-action" id="btnTopUpdate" type="button" hidden title="检查并安装 smac 管理端最新版本">
+      <svg><use href="#i-sync"/></svg><span class="chip-value" id="topUpdateText">检查更新</span>
+    </button>
     <button class="chip chip-action" id="btnTopGuestModal" type="button" title="生成客机端安装包或通过配对码接入客机">
       <svg><use href="#i-link"/></svg><span class="chip-value">客机端安装 / 接入</span>
     </button>
@@ -270,9 +273,9 @@
 <main class="wrap remote-wrap" id="remoteView" hidden>
   <section class="remote-head">
     <div>
-      <div class="remote-eyebrow">GUEST &amp; SSH WORKSPACE</div>
-      <h1>远程设备与客机</h1>
-      <p>导出客机端安装包发给另一台电脑，安装后自动与本机连接并上报 CLI 与 Desktop 环境；由本机统一确定同步目录、发送文件到客机桌面或打开完整终端。</p>
+      <div class="remote-eyebrow">GLOBAL NETWORK · ADMIN MESH &amp; CLIENT TOPOLOGY</div>
+      <h1>全局网络与设备拓扑</h1>
+      <p>登录同一唯一管理员账号的多台电脑自动互联为「管理员设备」；任意客户端向某台管理员主机发起握手时，全网列表实时同步并明确标注所属账号与直连主机——仅直连主机可执行 SSH、同步、传桌面与 Agent 操作。</p>
     </div>
     <div class="remote-head-actions">
       <button class="btn ghost" id="btnDownloadGuestPkg" type="button"><svg><use href="#i-file"/></svg>下载客机端安装包</button>
@@ -309,14 +312,32 @@
     </div>
   </section>
 
-  <section class="device-grid" id="deviceGrid"></section>
+  <section class="network-section" id="adminDeviceSection">
+    <div class="network-section-head">
+      <div>
+        <h2>管理员设备 <span class="net-sec-pill star">自动互联 · 最高权限</span></h2>
+        <p>所有登录唯一管理员账号的设备自动交换 SSH 公钥并互相建立直连通道，登出后自动吊销。</p>
+      </div>
+      <button class="btn ghost small" id="btnSyncTopology" type="button"><svg><use href="#i-sync"/></svg>同步全网拓扑</button>
+    </div>
+    <div class="device-grid" id="adminDeviceGrid"></div>
+  </section>
 
-  <div class="empty-state remote-empty" id="deviceEmpty" hidden>
-    <div class="empty-icon"><svg><use href="#i-server"/></svg></div>
-    <h3>还没有远程设备</h3>
-    <p>添加服务器、云主机或另一台 Mac/Windows，保存后用浏览器一键连接。</p>
-    <button class="btn primary" id="btnEmptyAddDevice"><svg><use href="#i-plus"/></svg>添加第一台设备</button>
-  </div>
+  <section class="network-section" id="guestDeviceSection">
+    <div class="network-section-head">
+      <div>
+        <h2>客户端与远程设备 <span class="net-sec-pill">直连隔离 · 全网可见</span></h2>
+        <p>展示全网客户端及其所属账号与直连管理员主机；非本机直连的客户端仅支持查看、换绑账号、请求改连到本机或强制断联。</p>
+      </div>
+    </div>
+    <section class="device-grid" id="deviceGrid"></section>
+    <div class="empty-state remote-empty" id="deviceEmpty" hidden>
+      <div class="empty-icon"><svg><use href="#i-server"/></svg></div>
+      <h3>还没有客户端或远程设备</h3>
+      <p>使用 smac 客户端登录分配的账号并向本机发起握手，或手动添加 SSH 服务器。</p>
+      <button class="btn primary" id="btnEmptyAddDevice"><svg><use href="#i-plus"/></svg>添加第一台设备</button>
+    </div>
+  </section>
 
   <section class="remote-tips">
     <div class="tip">
@@ -900,6 +921,10 @@
       <label class="field" id="huPasswordRow"><span>初始登录密码（至少 4 位）</span><input class="input" id="huPassword" type="password" placeholder="客机端凭此账号密码登录接入" autocomplete="new-password"></label>
       <label class="field"><span>7×24h 滚动周限额（加权 Token）</span><input class="input" id="huLimit" type="number" min="0" step="100000" value="1000000"></label>
       <label class="field"><span>备注</span><input class="input" id="huNotes" placeholder="部门 / 用途备注（可选）"></label>
+      <label class="check-row" style="margin:2px 0 12px">
+        <input type="checkbox" id="huAutoApprove">
+        <span>免审自动通过握手（信任账号：客户端向管理员主机发起握手时无需手动批准）</span>
+      </label>
       <div class="modal-error" id="huError" hidden></div>
     </div>
     <div class="modal-foot">
