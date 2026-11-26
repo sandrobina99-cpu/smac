@@ -1,6 +1,6 @@
 {
   "name": "@sandrobina/admin-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "author": "sandrobina99-cpu",
   "description": "smac 管理端 — 主机设备与 API 分发统一管理控制台",

@@ -1,6 +1,6 @@
 {
   "name": "@sandrobina/client-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "author": "sandrobina99-cpu",
   "description": "smac 客户端 — 客机主机接入与个人 API 额度控制台",
