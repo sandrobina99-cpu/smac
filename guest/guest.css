@@ -498,3 +498,128 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   .layout { grid-template-columns: 1fr; }
   .conn-meta-grid, .env-grid, .form-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- 账号体系与 API 配额面板 ---------- */
+.account-login-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+@media (max-width: 860px) {
+  .account-login-grid { grid-template-columns: 1fr; }
+}
+.acc-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 112, 136, 0.14);
+  border: 1px solid rgba(255, 112, 136, 0.35);
+  color: #fda4af;
+  font-size: 12px;
+}
+.acc-dash-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1.15fr;
+  gap: 10px;
+}
+@media (max-width: 960px) {
+  .acc-dash-grid { grid-template-columns: 1fr; }
+}
+.acc-card {
+  padding: 12px 14px;
+  border-radius: 13px;
+  border: 1px solid var(--border);
+  background: rgba(6, 10, 20, 0.52);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.acc-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.acc-kv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.acc-kv-row code {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 11.5px;
+  color: #8bf3dc;
+  word-break: break-all;
+}
+.acc-quota-nums {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.acc-quota-nums b { font-size: 18px; color: var(--text); }
+.acc-quota-nums em { margin-left: auto; font-style: normal; color: #79f2c7; font-weight: 600; }
+.acc-bar-track {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.acc-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #10b981, #38bdf8);
+  transition: width 0.25s ease;
+}
+.acc-bar-fill.warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.acc-bar-fill.bad { background: linear-gradient(90deg, #f43f5e, #fb7185); }
+.acc-quota-sub { font-size: 11px; color: var(--faint); }
+.acc-bound-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.acc-dev-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(16, 185, 129, 0.13);
+  border: 1px solid rgba(16, 185, 129, 0.32);
+  color: #d1fae5;
+}
+.acc-dev-pill.off {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+}
+.acc-dev-pill.self {
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.22);
+}
+.acc-models-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.acc-models-label { font-size: 11.5px; color: var(--muted); }
+.acc-model-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+.acc-model-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(106, 168, 255, 0.12);
+  border: 1px solid rgba(106, 168, 255, 0.26);
+  color: #bfdbfe;
+}
+.btn.tiny { padding: 4px 8px; font-size: 11px; border-radius: 8px; }
+

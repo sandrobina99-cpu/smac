@@ -376,8 +376,15 @@ static void renderDmgBackground(NSString *outPath) {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         NSString *dir = [NSString stringWithUTF8String:argv[1]];
-        renderIcon([dir stringByAppendingPathComponent:@"icon-host-1024.png"], NO);
-        renderIcon([dir stringByAppendingPathComponent:@"icon-guest-1024.png"], YES);
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *hostPng = [dir stringByAppendingPathComponent:@"icon-host-1024.png"];
+        NSString *guestPng = [dir stringByAppendingPathComponent:@"icon-guest-1024.png"];
+        if (![fm fileExistsAtPath:hostPng]) {
+            renderIcon(hostPng, NO);
+        }
+        if (![fm fileExistsAtPath:guestPng]) {
+            renderIcon(guestPng, YES);
+        }
         renderDmgBackground([dir stringByAppendingPathComponent:@"dmg-bg.png"]);
     }
     return 0;
@@ -445,9 +452,9 @@ assemble_app() {
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>2.1.0</string>
+  <string>3.0.0</string>
   <key>CFBundleVersion</key>
-  <string>210</string>
+  <string>300</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
@@ -484,7 +491,7 @@ PLIST
   find "$app_path/Contents/Resources/app" \( \
     -name "*.node" -o -name "*.dll" -o -name "*.dylib" -o -name "*.so" -o \
     -name "*.exe" -o -name "*.ico" -o -name "*.log" -o -name "*.pid" -o \
-    -name "host-pairing.json" -o -name "guest-pairing.json" -o -name "devices.json" -o \
+    -name "host-pairing.json" -o -name "guest-pairing.json" -o -name "hub-admin.json" -o -name "account-session.json" -o -name "devices.json" -o \
     -name "config.json" -o -name "agent-credentials.json" -o -name "bootstrap-peer.json" -o \
     -name "host-profile.json" -o -name "host-profile.seed.json" -o -name "pairing-code.txt" \
   \) -delete 2>/dev/null || true

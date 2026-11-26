@@ -48,13 +48,14 @@
     <div class="logo"><svg><use href="#i-swap"/></svg></div>
     <div class="brand-text">
       <div class="brand-name">smac<span>console</span></div>
-      <div class="brand-sub">文件同步 · 剪贴板 · 远程终端</div>
+      <div class="brand-sub">文件中枢 · 远程终端 · API 分发与账号管理</div>
     </div>
   </div>
   <nav class="view-switch" id="viewSwitch" aria-label="视图切换">
     <button class="view-btn active" data-view="files"><svg><use href="#i-folder"/></svg><span class="view-label">文件中枢</span></button>
     <button class="view-btn" data-view="remote"><svg><use href="#i-terminal"/></svg><span class="view-label">远程设备 · 客机</span><span class="nav-count" id="remoteCount" hidden>0</span></button>
     <button class="view-btn" data-view="agent"><svg><use href="#i-server"/></svg><span class="view-label">远程 Agent</span><span class="nav-count" id="agentCount" hidden>0</span></button>
+    <button class="view-btn" data-view="hub"><svg><use href="#i-key"/></svg><span class="view-label">API 分发与账号</span></button>
   </nav>
   <div class="top-chips">
     <button class="chip chip-action" id="btnTopGuestModal" type="button" title="生成客机端安装包或通过配对码接入客机">
@@ -476,6 +477,147 @@
   </div>
 </main>
 
+<main class="wrap hub-wrap" id="hubView" hidden>
+  <section class="hub-head">
+    <div>
+      <div class="remote-eyebrow">SUPREME ADMIN · API &amp; ACCOUNT CONTROL PLANE</div>
+      <h1>API 分发与账号客机管理</h1>
+      <p>以本机主机端为最高管理权限（唯一管理员账号）。统一创建用户账号、分发专属 API Key、配置 7×24h 滚动额度与模型倍率，并管理每个账号下绑定的多台客机设备。</p>
+    </div>
+    <div class="hub-admin-pill" id="hubAdminPill" hidden>
+      <svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-shield"/></svg>
+      <span id="hubAdminName">admin · 唯一超级管理员</span>
+      <code id="hubActiveGatewayText" style="opacity:0.75;font-size:11px"></code>
+      <button class="btn ghost tiny" type="button" id="btnHubSyncHostBinding" title="将本机 SSH 公钥与连接地址发布到网关，让已登录客机自动接入">同步主机配对信息</button>
+      <button class="btn ghost tiny" type="button" id="btnHubRefresh">刷新</button>
+      <button class="btn ghost tiny" type="button" id="btnHubLogout">退出</button>
+    </div>
+  </section>
+
+  <section class="panel hub-login-card" id="hubLoginCard">
+    <div class="panel-head">
+      <div class="panel-title">
+        <h2>登录唯一管理员控制台</h2>
+        <p>连接至自托管 API 分发网关，接管账号体系、API 发放与客机绑定权限</p>
+      </div>
+      <span class="badge" id="hubHealthBadge" data-state="off">检测中</span>
+    </div>
+    <form class="hub-login-form" id="hubLoginForm">
+      <label class="field">
+        <span>网关服务器地址</span>
+        <input class="input" id="hubGatewayUrl" type="text" value="https://hub.sandrobina.me" placeholder="https://hub.sandrobina.me 或 http://137.184.214.105:8787" spellcheck="false" autocomplete="off">
+        <small class="hint">支持主域名 <code>https://hub.sandrobina.me</code>、直连地址 <code>http://137.184.214.105:8787</code> 或本机局域网网关地址。</small>
+      </label>
+      <label class="field">
+        <span>唯一管理员账号</span>
+        <input class="input" id="hubAdminUserInput" type="text" value="admin" placeholder="admin" autocomplete="username">
+      </label>
+      <label class="field">
+        <span>管理员密码</span>
+        <input class="input" id="hubAdminPassInput" type="password" placeholder="输入唯一管理员密码" autocomplete="current-password">
+      </label>
+      <div class="modal-error" id="hubLoginError" hidden></div>
+      <button class="btn primary wide" type="submit" id="btnHubLogin">登录唯一管理员控制台</button>
+    </form>
+  </section>
+
+  <section id="hubDash" hidden>
+    <div class="hub-stats-grid">
+      <article class="stat"><div class="stat-icon tint-teal"><svg><use href="#i-shield"/></svg></div><div class="stat-body"><div class="stat-num" id="hubStUsers">0 / 0</div><div class="stat-label">活跃 / 总账号数</div></div></article>
+      <article class="stat"><div class="stat-icon tint-blue"><svg><use href="#i-server"/></svg></div><div class="stat-body"><div class="stat-num" id="hubStDevices">0 / 0</div><div class="stat-label">在线 / 已绑定客机</div></div></article>
+      <article class="stat"><div class="stat-icon tint-violet"><svg><use href="#i-key"/></svg></div><div class="stat-body"><div class="stat-num" id="hubStModels">0 / 0</div><div class="stat-label">启用 / 总模型数</div></div></article>
+      <article class="stat"><div class="stat-icon tint-amber"><svg><use href="#i-sync"/></svg></div><div class="stat-body"><div class="stat-num" id="hubStTokens">0</div><div class="stat-label">7 天加权 Token</div></div></article>
+      <article class="stat"><div class="stat-icon tint-teal"><svg><use href="#i-clock"/></svg></div><div class="stat-body"><div class="stat-num" id="hubStRequests">0</div><div class="stat-label">7 天请求次数</div></div></article>
+    </div>
+
+    <div class="hub-toolbar" style="margin-top:14px">
+      <div class="segmented" id="hubSubTabs">
+        <button class="seg active" data-hub-tab="accounts" type="button">账号与客机绑定</button>
+        <button class="seg" data-hub-tab="overview" type="button">全局概览</button>
+        <button class="seg" data-hub-tab="models" type="button">模型与倍率</button>
+        <button class="seg" data-hub-tab="usage" type="button">调用流水</button>
+        <button class="seg" data-hub-tab="settings" type="button">网关与主机配置</button>
+      </div>
+      <div class="hub-toolbar-right">
+        <button class="btn primary small" type="button" id="btnHubNewUser"><svg><use href="#i-plus"/></svg>新建账号</button>
+      </div>
+    </div>
+
+    <div class="hub-pane" data-hub-pane="accounts" style="margin-top:14px">
+      <div class="hub-toolbar" style="margin-bottom:12px">
+        <input class="input" id="hubUserSearch" placeholder="按账号名、备注或已绑定客机名/IP 搜索…" style="max-width:360px">
+        <span class="hint">一个账号可同时绑定多台客机设备；可在「远程设备 · 客机」直接查看并切换每台客机的所属账号。</span>
+      </div>
+      <div class="hub-user-grid" id="hubUserGrid"></div>
+    </div>
+
+    <div class="hub-pane" data-hub-pane="overview" hidden style="margin-top:14px">
+      <div class="hub-two-col">
+        <article class="panel">
+          <div class="panel-head"><div class="panel-title"><h2>近 7 天账号消耗排行</h2><p>7×24h 严格滚动窗口</p></div></div>
+          <div id="hubTopUsers"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div class="panel-title"><h2>近 7 天热门模型排行</h2><p>按加权 Token 统计</p></div></div>
+          <div id="hubTopModels"></div>
+        </article>
+      </div>
+    </div>
+
+    <div class="hub-pane" data-hub-pane="models" hidden style="margin-top:14px">
+      <div class="hub-toolbar" style="margin-bottom:12px">
+        <input class="input" id="hubModelSearch" placeholder="搜索模型 ID 或名称…" style="max-width:300px">
+        <button class="btn primary small" type="button" id="btnHubSyncModels"><svg><use href="#i-sync"/></svg>同步上游模型</button>
+      </div>
+      <div class="hub-table-wrap">
+        <table class="hub-table">
+          <thead><tr><th>模型</th><th>提供方</th><th>推理强度</th><th>扣费倍率</th><th>7 天用量</th><th>全局状态</th></tr></thead>
+          <tbody id="hubModelsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hub-pane" data-hub-pane="usage" hidden style="margin-top:14px">
+      <div class="hub-toolbar" style="margin-bottom:12px">
+        <select class="select" id="hubUsageUserFilter" style="max-width:260px"><option value="">全部账号</option></select>
+      </div>
+      <div class="hub-table-wrap">
+        <table class="hub-table">
+          <thead><tr><th>时间</th><th>所属账号</th><th>模型</th><th>Token × 倍率 = 加权</th><th>状态</th><th>耗时</th></tr></thead>
+          <tbody id="hubUsageBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hub-pane" data-hub-pane="settings" hidden style="margin-top:14px">
+      <div class="hub-two-col">
+        <article class="panel">
+          <div class="panel-head"><div class="panel-title"><h2>网关与上游 API 设置</h2><p id="hubSetKeyMask">读取中…</p></div></div>
+          <div class="hub-login-form">
+            <label class="field"><span>上游 API Base URL</span><input class="input" id="hubSetUpstreamUrl" placeholder="https://api.sandrobina.me/v1"></label>
+            <label class="field"><span>更新上游 API Key（留空保持不变）</span><input class="input" id="hubSetUpstreamKey" type="password" placeholder="留空不修改"></label>
+            <label class="field"><span>对外 API Base URL</span><input class="input" id="hubSetPublicUrl" placeholder="https://hub.sandrobina.me/v1"></label>
+            <label class="field"><span>新账号默认周限额（加权 Token）</span><input class="input" id="hubSetDefaultLimit" type="number" min="0" step="100000"></label>
+            <button class="btn primary" type="button" id="btnHubSaveSettings">保存网关配置</button>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div class="panel-title"><h2>主机配对广播 &amp; 唯一管理员安全</h2><p>唯一管理账号拥有全系统最高权限</p></div></div>
+          <div class="hub-login-form">
+            <div class="hub-bound-section">
+              <div class="hub-bound-label">当前已同步至网关的主机配对信息：</div>
+              <div id="hubHostBindingSummary" style="font-size:12px;color:var(--text);line-height:1.5">读取中…</div>
+            </div>
+            <label class="field"><span>当前唯一管理员密码</span><input class="input" id="hubCurAdminPw" type="password" placeholder="输入当前密码"></label>
+            <label class="field"><span>新管理员密码（至少 6 位）</span><input class="input" id="hubNewAdminPw" type="password" placeholder="输入新密码"></label>
+            <button class="btn ghost" type="button" id="btnHubChangeAdminPw">修改唯一管理员密码</button>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+</main>
+
 <div class="term-overlay" id="termOverlay" hidden>
   <section class="term-window" aria-label="远程终端">
     <header class="term-head">
@@ -746,9 +888,75 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="hubUserModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="hubUserModalTitle">新建账号并分发 API Key</h3>
+      <button class="icon-btn" data-close="hubUserModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <label class="field"><span>账号用户名</span><input class="input" id="huUsername" placeholder="例如 alice" autocomplete="off"></label>
+      <label class="field"><span>显示名称</span><input class="input" id="huDisplayName" placeholder="例如 Alice Chen" autocomplete="off"></label>
+      <label class="field" id="huPasswordRow"><span>初始登录密码（至少 4 位）</span><input class="input" id="huPassword" type="password" placeholder="客机端凭此账号密码登录接入" autocomplete="new-password"></label>
+      <label class="field"><span>7×24h 滚动周限额（加权 Token）</span><input class="input" id="huLimit" type="number" min="0" step="100000" value="1000000"></label>
+      <label class="field"><span>备注</span><input class="input" id="huNotes" placeholder="部门 / 用途备注（可选）"></label>
+      <div class="modal-error" id="huError" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="hubUserModal">取消</button>
+      <button class="btn primary" id="btnHubUserSave">保存账号</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="hubAclModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="hubAclTitle">配置账号可用模型权限</h3>
+      <button class="icon-btn" data-close="hubAclModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <label class="field">
+        <span>访问控制模式</span>
+        <select class="select" id="hubAclMode">
+          <option value="all_except_denied">黑名单模式（默认允许全部，取消勾选即禁止）</option>
+          <option value="allow_list">白名单模式（仅允许勾选的模型）</option>
+        </select>
+      </label>
+      <div class="agent-pairs" id="hubAclList" style="max-height:320px;overflow:auto"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="hubAclModal">取消</button>
+      <button class="btn primary" id="btnHubAclSave">保存模型权限</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="hubBindDevModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="hubBindDevTitle">绑定客机所属账号</h3>
+      <button class="icon-btn" data-close="hubBindDevModal"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <label class="field">
+        <span>选择该客机归属的账号（一个账号下可绑定多台客机）</span>
+        <select class="select" id="hubBindAccountSelect"></select>
+      </label>
+      <p class="hint">以本机主机管理端为最高权限：绑定后，客机设备卡片将明确标注其所属账号，并在「API 分发与账号」页同步归组展示。</p>
+      <div class="modal-error" id="hubBindError" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="hubBindDevModal">取消</button>
+      <button class="btn primary" id="btnHubBindSave">确认绑定</button>
+    </div>
+  </div>
+</div>
+
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
 <script src="/terminal.js"></script>
+<script src="/hub.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

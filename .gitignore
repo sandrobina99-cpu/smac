@@ -2,7 +2,22 @@
 node_modules/
 **/node_modules/
 dist/
+packages/*/dist/
+apps/*/dist/
+apps/*/dist-electron/
+apps/*/release/
 enable-ssh/
+
+# Gateway Secrets & Local SQLite Data
+.env
+.env.*
+!.env.example
+apps/gateway/.env
+apps/gateway/data/
+*.db
+*.db-shm
+*.db-wal
+.master.key
 
 # Compiled Native Binaries (rebuild via package-editions.ps1 / macos/build-mac-apps.sh)
 *.exe
@@ -26,6 +41,8 @@ macos/dmg-bg.png
 *.bak
 host-pairing.json
 guest-pairing.json
+hub-admin.json
+account-session.json
 devices.json
 config.json
 agent-credentials.json

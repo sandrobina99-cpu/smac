@@ -33,8 +33,139 @@ const PAIRING_CODE_FILE = path.join(GUEST_DIR, 'pairing-code.txt');
 const LOG_FILE = path.join(GUEST_DIR, 'guest.log');
 const PID_FILE = path.join(GUEST_DIR, 'guest-web.pid');
 const PORT_FILE = path.join(GUEST_DIR, 'guest-web-port');
+const DEVICE_ID_FILE = path.join(GUEST_DIR, 'device-id');
+const ACCOUNT_SESSION_FILE = path.join(GUEST_DIR, 'account-session.json');
+const DEFAULT_GATEWAY_URL = 'https://hub.sandrobina.me';
 
 let envCache = null;
+
+function normalizeGatewayUrl(raw) {
+  const s = String(raw || '').trim().replace(/\/+$/, '');
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  return 'http://' + s;
+}
+
+function getOrCreateDeviceId() {
+  try {
+    const existing = fs.readFileSync(DEVICE_ID_FILE, 'utf8').trim();
+    if (/^[a-zA-Z0-9._:-]{4,96}$/.test(existing)) return existing;
+  } catch { }
+  const hostSlug = os.hostname().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'guest';
+  const id = 'smac_' + hostSlug.toLowerCase() + '_' + crypto.randomBytes(4).toString('hex');
+  try {
+    fs.mkdirSync(GUEST_DIR, { recursive: true });
+    fs.writeFileSync(DEVICE_ID_FILE, id, 'utf8');
+  } catch { }
+  return id;
+}
+
+function readAccountSession() {
+  const seed = readJson(SEED_FILE);
+  const seedGw = (seed && seed.gatewayUrl) ? normalizeGatewayUrl(seed.gatewayUrl) : '';
+  const data = readJson(ACCOUNT_SESSION_FILE);
+  if (data && typeof data === 'object') {
+    return {
+      gatewayUrl: normalizeGatewayUrl(data.gatewayUrl || seedGw || DEFAULT_GATEWAY_URL) || DEFAULT_GATEWAY_URL,
+      token: String(data.token || ''),
+      userId: Number(data.userId) || 0,
+      username: String(data.username || ''),
+      displayName: String(data.displayName || ''),
+      profile: data.profile && typeof data.profile === 'object' ? data.profile : null
+    };
+  }
+  return {
+    gatewayUrl: seedGw || DEFAULT_GATEWAY_URL,
+    token: '',
+    userId: 0,
+    username: '',
+    displayName: '',
+    profile: null
+  };
+}
+
+function writeAccountSession(patch) {
+  const cur = readAccountSession();
+  const next = Object.assign({}, cur, patch || {});
+  if (next.gatewayUrl) next.gatewayUrl = normalizeGatewayUrl(next.gatewayUrl) || DEFAULT_GATEWAY_URL;
+  writeJson(ACCOUNT_SESSION_FILE, next);
+  if (!IS_WIN) { try { fs.chmodSync(ACCOUNT_SESSION_FILE, 0o600); } catch { } }
+  return next;
+}
+
+function applyHostBindingFromProfile(profile) {
+  if (!profile || !profile.hostBinding || typeof profile.hostBinding !== 'object') return;
+  const hb = profile.hostBinding;
+  const patch = {};
+  if (hb.hostName) patch.hostName = String(hb.hostName).trim();
+  if (hb.publicKey) patch.publicKey = String(hb.publicKey).trim();
+  if (hb.pairToken) patch.pairToken = String(hb.pairToken).trim();
+  if (Array.isArray(hb.endpoints) && hb.endpoints.length) patch.endpoints = hb.endpoints;
+  if (hb.zerotierNetworkId) patch.zerotierNetworkId = String(hb.zerotierNetworkId).trim();
+  if (Object.keys(patch).length) saveHostProfile(patch);
+}
+
+async function gatewayClientFetch(method, apiPath, body, opts = {}) {
+  const sess = readAccountSession();
+  const baseUrl = normalizeGatewayUrl(opts.gatewayUrl || sess.gatewayUrl) || DEFAULT_GATEWAY_URL;
+  const token = opts.token !== undefined ? opts.token : sess.token;
+  const headers = { 'Accept': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  if (body !== undefined && method !== 'GET' && method !== 'HEAD') {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(baseUrl + apiPath, {
+    method,
+    headers,
+    body: (body !== undefined && method !== 'GET' && method !== 'HEAD') ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(opts.timeoutMs || 10000)
+  });
+  const data = await res.json().catch(() => ({}));
+  if ((res.status === 401 || res.status === 403) && apiPath !== '/api/client/login' && !opts.skipClearOnAuthErr) {
+    writeAccountSession({ token: '', profile: null });
+  }
+  if (!res.ok) {
+    throw new Error((data && (data.error || data.message)) || ('网关返回 HTTP ' + res.status));
+  }
+  return data;
+}
+
+async function loginAccount(gatewayUrl, username, password) {
+  const baseUrl = normalizeGatewayUrl(gatewayUrl || readAccountSession().gatewayUrl) || DEFAULT_GATEWAY_URL;
+  const res = await gatewayClientFetch('POST', '/api/client/login', { username, password }, {
+    gatewayUrl: baseUrl,
+    token: '',
+    skipClearOnAuthErr: true
+  });
+  const prof = res.profile || null;
+  const user = (prof && prof.user) || {};
+  writeAccountSession({
+    gatewayUrl: baseUrl,
+    token: res.token || '',
+    userId: Number(user.id) || 0,
+    username: String(user.username || username),
+    displayName: String(user.displayName || user.username || username),
+    profile: prof
+  });
+  applyHostBindingFromProfile(prof);
+  appendLog('ACCOUNT_LOGIN | 已登录账号 ' + (user.displayName || user.username || username) + ' (@' + (user.username || username) + ') -> ' + baseUrl);
+  return { ok: true, account: readAccountSession(), profile: prof };
+}
+
+async function refreshAccountProfile() {
+  const sess = readAccountSession();
+  if (!sess.token) return { ok: false, loggedIn: false };
+  const prof = await gatewayClientFetch('GET', '/api/client/me');
+  const user = (prof && prof.user) || {};
+  writeAccountSession({
+    userId: Number(user.id) || sess.userId,
+    username: String(user.username || sess.username),
+    displayName: String(user.displayName || user.username || sess.displayName),
+    profile: prof
+  });
+  applyHostBindingFromProfile(prof);
+  return { ok: true, loggedIn: true, profile: prof };
+}
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -534,6 +665,9 @@ function buildGuestRegistrationPayload() {
   const primaryIp = uniqueIps[0] || '';
   const fallbackIp = uniqueIps[1] || '';
 
+  const acc = readAccountSession();
+  const deviceId = getOrCreateDeviceId();
+
   const payload = {
     name: os.hostname().replace(/\.local$/i, ''),
     hostname: os.hostname(),
@@ -546,6 +680,10 @@ function buildGuestRegistrationPayload() {
     zerotierNodeId: zt.nodeId || '',
     zerotierStatus: zt.status || '',
     zerotierIp: ztIp,
+    accountId: acc.userId || 0,
+    accountUsername: acc.username || '',
+    accountDisplayName: acc.displayName || '',
+    gatewayDeviceId: deviceId,
     env: envCache
   };
 
@@ -563,6 +701,10 @@ async function activelyConnectToHost(customPatch, forceEnvRefresh = false) {
   if (customPatch && typeof customPatch === 'object') {
     saveHostProfile(customPatch);
   }
+  const acc = readAccountSession();
+  if (acc.token) {
+    try { await refreshAccountProfile(); } catch { }
+  }
   const profile = ensureHostProfile();
   const keyRes = authorizeHostKey(profile.publicKey);
 
@@ -574,8 +716,47 @@ async function activelyConnectToHost(customPatch, forceEnvRefresh = false) {
     await refreshEnvCacheAsync();
   }
   const { payload, pairingCode } = buildGuestRegistrationPayload();
-  const endpoints = orderEndpoints(profile.endpoints || []);
-  let connectedHostName = profile.hostName || '';
+  const deviceId = getOrCreateDeviceId();
+
+  // 如果客机已登录账号体系，先向网关上报并绑定本机到当前账号（支持 1 账号多客机）
+  let gatewaySynced = false;
+  if (readAccountSession().token) {
+    try {
+      const regRes = await gatewayClientFetch('POST', '/api/client/devices/register', {
+        id: deviceId,
+        deviceName: payload.name,
+        hostname: payload.hostname,
+        os: payload.os,
+        sshUser: payload.user,
+        sshPort: payload.sshPort,
+        primaryIp: payload.primaryIp,
+        fallbackIp: payload.fallbackIp,
+        zerotierIp: payload.zerotierIp,
+        zerotierNodeId: payload.zerotierNodeId,
+        zerotierNetworkId: payload.zerotierNetworkId,
+        connected: true,
+        sshAuthorized: Boolean(keyRes.authorized),
+        env: payload.env
+      });
+      gatewaySynced = true;
+      if (regRes && regRes.hostBinding) {
+        applyHostBindingFromProfile({ hostBinding: regRes.hostBinding });
+      }
+      if (regRes && Array.isArray(regRes.devices)) {
+        const curSess = readAccountSession();
+        if (curSess.profile) {
+          curSess.profile.boundDevices = regRes.devices;
+          writeAccountSession({ profile: curSess.profile });
+        }
+      }
+    } catch (err) {
+      appendLog('GATEWAY_BIND_WARN | 网关账号绑定同步失败: ' + (err && err.message ? err.message : err));
+    }
+  }
+
+  const freshProfile = ensureHostProfile();
+  const endpoints = orderEndpoints(freshProfile.endpoints || []);
+  let connectedHostName = freshProfile.hostName || '';
   let activeEndpoint = '';
   let hostMessage = '';
   let lastErr = '';
@@ -586,7 +767,7 @@ async function activelyConnectToHost(customPatch, forceEnvRefresh = false) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Smac-Pair-Token': profile.pairToken || ''
+          'X-Smac-Pair-Token': freshProfile.pairToken || ''
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(4000)
@@ -615,11 +796,12 @@ async function activelyConnectToHost(customPatch, forceEnvRefresh = false) {
       lastActiveEndpoint: activeEndpoint,
       lastHostResponse: hostMessage
     });
-    appendLog('CONNECT_OK | 已主动连接主机端 ' + connectedHostName + ' (' + activeEndpoint + ')');
+    appendLog('CONNECT_OK | 已主动连接主机端 ' + connectedHostName + ' (' + activeEndpoint + ')' + (gatewaySynced ? ' [账号绑定已同步]' : ''));
     return {
       ok: true,
       connected: true,
       hostNotified: true,
+      gatewaySynced,
       keyAuthorized: keyRes.authorized,
       activeEndpoint,
       hostName: connectedHostName,
@@ -633,17 +815,18 @@ async function activelyConnectToHost(customPatch, forceEnvRefresh = false) {
     lastConnectedAt: now,
     lastDisconnectedAt: '',
     lastHostResponse: endpoints.length
-      ? ('未直连到主机配对端口（' + lastErr + '），已开启本机 SSH 授权并刷新配对码')
+      ? ('未直连到主机配对端口（' + lastErr + '），已开启本机 SSH 授权' + (gatewaySynced ? '并已绑定至账号' : '并刷新配对码'))
       : '已开启本机 SSH 授权并生成配对码（可在下方填写主机地址或复制配对码到主机端接入）'
   });
   const fallbackMsg = endpoints.length
-    ? ('已开启本机 SSH 免密授权（未能直接回连主机 8797 端口：' + lastErr + '；可直接复制本页配对码到主机控制台粘贴接入）')
-    : '已开启本机 SSH 免密授权并生成最新配对码；填写主机 IP 或复制配对码到主机控制台即可连接。';
+    ? ('已开启本机 SSH 免密授权' + (gatewaySynced ? '并已将本机注册到当前账号' : '') + '（未能直接回连主机 8797 端口：' + lastErr + '）')
+    : '已开启本机 SSH 免密授权并生成最新配对码；登录账号或填写主机 IP 即可直连。';
   appendLog('CONNECT_AUTH | ' + fallbackMsg);
   return {
     ok: true,
     connected: keyRes.authorized,
     hostNotified: false,
+    gatewaySynced,
     keyAuthorized: keyRes.authorized,
     activeEndpoint: '',
     hostName: connectedHostName,
@@ -654,10 +837,24 @@ async function activelyConnectToHost(customPatch, forceEnvRefresh = false) {
 
 async function activelyDisconnectFromHost() {
   const profile = ensureHostProfile();
-  const { payload } = buildGuestRegistrationPayload(false);
+  const { payload } = buildGuestRegistrationPayload();
   const endpoints = orderEndpoints(profile.endpoints || []);
   let hostNotified = false;
   let notifiedEp = '';
+
+  const deviceId = getOrCreateDeviceId();
+  if (readAccountSession().token) {
+    try {
+      const discRes = await gatewayClientFetch('POST', '/api/client/devices/' + encodeURIComponent(deviceId) + '/disconnect', {});
+      if (discRes && Array.isArray(discRes.devices)) {
+        const curSess = readAccountSession();
+        if (curSess.profile) {
+          curSess.profile.boundDevices = discRes.devices;
+          writeAccountSession({ profile: curSess.profile });
+        }
+      }
+    } catch { }
+  }
 
   for (const ep of endpoints) {
     try {
@@ -755,6 +952,18 @@ async function buildGuestState() {
     },
     services,
     pairingCode,
+    deviceId: getOrCreateDeviceId(),
+    account: (() => {
+      const s = readAccountSession();
+      return {
+        loggedIn: Boolean(s.token),
+        gatewayUrl: s.gatewayUrl || DEFAULT_GATEWAY_URL,
+        userId: s.userId || 0,
+        username: s.username || '',
+        displayName: s.displayName || '',
+        profile: s.profile || null
+      };
+    })(),
     env: envCache,
     logs: tailLogs(100),
     serverTime: new Date().toISOString()
@@ -823,6 +1032,34 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && route === '/api/state') {
       sendJson(res, 200, await buildGuestState());
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/api/account/login') {
+      const body = await readBody(req);
+      const loginRes = await loginAccount(body.gatewayUrl, body.username, body.password);
+      // 登录后自动执行一次连接与账号客机绑定
+      const connRes = await activelyConnectToHost(null, false).catch(e => ({ ok: false, message: e.message }));
+      sendJson(res, 200, Object.assign({ connectResult: connRes }, loginRes));
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/api/account/logout') {
+      writeAccountSession({ token: '', profile: null });
+      appendLog('ACCOUNT_LOGOUT | 已退出账号登录');
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/api/account/refresh') {
+      const r = await refreshAccountProfile();
+      sendJson(res, 200, r);
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/api/account/test-key') {
+      const r = await gatewayClientFetch('POST', '/api/client/test-key', {});
+      sendJson(res, 200, r);
       return;
     }
 

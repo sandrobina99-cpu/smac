@@ -1,0 +1,72 @@
+name: Build Desktop Apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared and desktop bundles
+        run: npm run build
+
+      - name: Package Admin Desktop (macOS)
+        if: matrix.platform == 'mac'
+        run: npm run pack:admin:mac
+
+      - name: Package Client Desktop (macOS)
+        if: matrix.platform == 'mac'
+        run: npm run pack:client:mac
+
+      - name: Package Admin Desktop (Windows)
+        if: matrix.platform == 'win'
+        run: npm run pack:admin:win
+
+      - name: Package Client Desktop (Windows)
+        if: matrix.platform == 'win'
+        run: npm run pack:client:win
+
+      - name: Upload Admin Desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-desktop-${{ matrix.platform }}
+          path: |
+            apps/admin-desktop/release/*.dmg
+            apps/admin-desktop/release/*.zip
+            apps/admin-desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Upload Client Desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-desktop-${{ matrix.platform }}
+          path: |
+            apps/client-desktop/release/*.dmg
+            apps/client-desktop/release/*.zip
+            apps/client-desktop/release/*.exe
+          if-no-files-found: error

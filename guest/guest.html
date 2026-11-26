@@ -34,11 +34,14 @@
   <div class="brand">
     <div class="logo"><svg><use href="#i-server"/></svg></div>
     <div class="brand-text">
-      <div class="brand-name">smac<span>guest</span></div>
-      <div class="brand-sub">客机端控制台 · 主动连接与断联 · 本地订阅环境</div>
+      <div class="brand-name">smac<span>client</span></div>
+      <div class="brand-sub">客机与 API 客户端 · 账号登录 · API 配额 · 主动连接与断联主机</div>
     </div>
   </div>
   <div class="top-chips">
+    <div class="chip" id="chipAccount" data-state="off" title="当前登录的账号归属">
+      <span class="dot"></span><span class="chip-label">所属账号</span><span class="chip-value" id="chipAccountText">未登录</span>
+    </div>
     <div class="chip" id="chipHostConn" data-state="off" title="与主机端的连接及 SSH 公钥授权状态">
       <span class="dot"></span><span class="chip-label">主机连接</span><span class="chip-value" id="chipHostConnText">检测中</span>
     </div>
@@ -58,6 +61,73 @@
 </header>
 
 <main class="wrap">
+  <section class="panel account-panel" id="accountPanel" style="margin-bottom:14px;">
+    <div class="panel-head">
+      <div class="panel-title">
+        <h2>账号体系与 API 配额中心</h2>
+        <p>凭主机管理员分配的账号登录：自动拉取主机接入配置、将本机绑定至账号（支持同账号多客机）并查看专属 API Key 与 7×24h 滚动额度</p>
+      </div>
+      <div class="btn-row" id="accountHeadActions" hidden>
+        <span class="badge" id="accountUserBadge" data-state="ok">已登录</span>
+        <button class="btn ghost small" id="btnRefreshAccount" type="button"><svg><use href="#i-sync"/></svg>刷新配额</button>
+        <button class="btn ghost small" id="btnLogoutAccount" type="button">退出账号</button>
+      </div>
+    </div>
+
+    <div id="accountLoginBox">
+      <div class="account-login-grid">
+        <label class="field">
+          <span>网关服务器地址</span>
+          <input class="input" id="accGatewayUrl" value="https://hub.sandrobina.me" placeholder="https://hub.sandrobina.me" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>账号用户名</span>
+          <input class="input" id="accUsername" placeholder="由唯一管理员分配的账号" autocomplete="username">
+        </label>
+        <label class="field">
+          <span>登录密码</span>
+          <input class="input" id="accPassword" type="password" placeholder="输入账号密码" autocomplete="current-password">
+        </label>
+        <div class="field" style="justify-content:flex-end;">
+          <button class="btn primary" id="btnAccountLogin" type="button" style="height:38px;"><svg><use href="#i-key"/></svg>登录并绑定本机</button>
+        </div>
+      </div>
+      <div class="acc-error" id="accLoginError" hidden></div>
+    </div>
+
+    <div id="accountDashBox" hidden>
+      <div class="acc-dash-grid">
+        <div class="acc-card">
+          <div class="acc-card-label">API Base URL 与专属 Key</div>
+          <div class="acc-kv-row">
+            <code id="accBaseUrl">—</code>
+            <button class="btn ghost tiny" id="btnCopyBaseUrl" type="button">复制地址</button>
+          </div>
+          <div class="acc-kv-row" style="margin-top:6px;">
+            <code id="accApiKeyMask">—</code>
+            <button class="btn ghost tiny" id="btnToggleApiKey" type="button">显示</button>
+            <button class="btn primary tiny" id="btnCopyApiKey" type="button">复制 Key</button>
+            <button class="btn ghost tiny" id="btnTestApiKey" type="button">测连通</button>
+          </div>
+        </div>
+        <div class="acc-card">
+          <div class="acc-card-label">7×24h 滚动周额度</div>
+          <div class="acc-quota-nums"><b id="accQuotaUsed">0</b><span> / <span id="accQuotaLimit">0</span></span><em id="accQuotaRemain">剩余 0</em></div>
+          <div class="acc-bar-track"><div class="acc-bar-fill" id="accQuotaBar"></div></div>
+          <div class="acc-quota-sub" id="accQuotaSub">超过 168 小时的调用会自动滚回释放</div>
+        </div>
+        <div class="acc-card">
+          <div class="acc-card-label">本账号已绑定的全部客机（1 账号多客机）</div>
+          <div class="acc-bound-list" id="accBoundDevicesList"></div>
+        </div>
+      </div>
+      <div class="acc-models-row">
+        <span class="acc-models-label">当前账号可用模型 (<b id="accModelCount">0</b>)：</span>
+        <div class="acc-model-pills" id="accModelPills"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="zt-bar" id="ztBar">
     <div class="zt-info">
       <div class="zt-title-row">

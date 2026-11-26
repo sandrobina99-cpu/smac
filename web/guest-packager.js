@@ -156,7 +156,12 @@ function upsertGuestDevice(payload) {
     if (payload.zerotierNodeId) existing.zerotierNodeId = String(payload.zerotierNodeId).trim();
     if (payload.zerotierStatus) existing.zerotierStatus = String(payload.zerotierStatus).trim();
     if (payload.zerotierNetworkId) existing.zerotierNetworkId = String(payload.zerotierNetworkId).trim();
-    existing.guestDisconnected = false;
+    if (payload.accountId !== undefined && Number(payload.accountId) > 0) existing.accountId = Number(payload.accountId);
+    if (payload.accountUsername) existing.accountUsername = String(payload.accountUsername).trim();
+    if (payload.accountDisplayName) existing.accountDisplayName = String(payload.accountDisplayName).trim();
+    if (payload.accountEnabled !== undefined) existing.accountEnabled = payload.accountEnabled !== false;
+    if (payload.gatewayDeviceId) existing.gatewayDeviceId = String(payload.gatewayDeviceId).trim();
+    existing.guestDisconnected = Boolean(payload.guestDisconnected);
     existing.updatedAt = now;
     existing.lastConnectedAt = now;
     existing.lastError = '';
@@ -182,7 +187,12 @@ function upsertGuestDevice(payload) {
       zerotierIp: String(payload.zerotierIp || '').trim(),
       zerotierStatus: String(payload.zerotierStatus || '').trim(),
       zerotierNetworkId: String(payload.zerotierNetworkId || '').trim(),
-      guestDisconnected: false,
+      accountId: Number(payload.accountId) || 0,
+      accountUsername: String(payload.accountUsername || '').trim(),
+      accountDisplayName: String(payload.accountDisplayName || '').trim(),
+      accountEnabled: payload.accountEnabled !== false,
+      gatewayDeviceId: String(payload.gatewayDeviceId || '').trim(),
+      guestDisconnected: Boolean(payload.guestDisconnected),
       guestEnv: payload.env && typeof payload.env === 'object' ? payload.env : null,
       createdAt: now,
       updatedAt: now,
@@ -476,12 +486,18 @@ function buildGuestSetupZip() {
       fs.copyFileSync(srcMac, path.join(stageDir, macAsset));
     }
   }
+  let gatewayUrl = 'https://hub.sandrobina.me';
+  try {
+    const hubCfg = readJson(path.join(DATA_DIR, 'hub-admin.json'));
+    if (hubCfg && hubCfg.serverUrl) gatewayUrl = String(hubCfg.serverUrl).trim();
+  } catch { }
   writeJson(path.join(stageDir, 'host-profile.seed.json'), {
     hostName: cfg.hostName,
     publicKey: cfg.publicKey,
     pairToken: cfg.pairToken,
     endpoints: cfg.endpoints,
-    zerotierNetworkId: ztNetworkId
+    zerotierNetworkId: ztNetworkId,
+    gatewayUrl
   });
   const winGuestConsoleCmd = '@echo off\r\nchcp 65001 >nul\r\ncd /d "%~dp0"\r\nif exist "%~dp0smac-guest.exe" (\r\n  start "" "%~dp0smac-guest.exe"\r\n) else (\r\n  node "%~dp0guest-server.js" --open\r\n)\r\n';
   fs.writeFileSync(path.join(stageDir, '启动客机控制台.cmd'), winGuestConsoleCmd, 'utf8');

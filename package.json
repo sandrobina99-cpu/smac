@@ -1,0 +1,33 @@
+{
+  "name": "smac",
+  "version": "3.0.0",
+  "private": true,
+  "description": "smac — Unified Host/Guest File Sync, Remote Terminal, Agent Hub & Self-Hosted API Key Distribution Gateway",
+  "workspaces": [
+    "packages/shared",
+    "apps/gateway",
+    "apps/admin-desktop",
+    "apps/client-desktop"
+  ],
+  "scripts": {
+    "dev:gateway": "npm run dev --workspace=@sandrobina/gateway",
+    "dev:admin": "npm run dev --workspace=@sandrobina/admin-desktop",
+    "dev:client": "npm run dev --workspace=@sandrobina/client-desktop",
+    "build:shared": "npm run build --workspace=@sandrobina/shared",
+    "build:gateway": "npm run build:shared && npm run build --workspace=@sandrobina/gateway",
+    "build:admin": "npm run build:shared && npm run build --workspace=@sandrobina/admin-desktop",
+    "build:client": "npm run build:shared && npm run build --workspace=@sandrobina/client-desktop",
+    "build": "npm run build:shared && npm run build:gateway && npm run build:admin && npm run build:client",
+    "test": "npm run build:shared && npm test --workspace=@sandrobina/gateway",
+    "pack:admin:mac": "npm run build:admin && npm run pack:mac --workspace=@sandrobina/admin-desktop",
+    "pack:admin:win": "npm run build:admin && npm run pack:win --workspace=@sandrobina/admin-desktop",
+    "pack:client:mac": "npm run build:client && npm run pack:mac --workspace=@sandrobina/client-desktop",
+    "pack:client:win": "npm run build:client && npm run pack:win --workspace=@sandrobina/client-desktop"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "electron": true,
+    "electron-winstaller": true,
+    "fsevents": true
+  }
+}

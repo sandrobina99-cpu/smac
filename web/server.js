@@ -15,6 +15,7 @@ const peerDiscovery = require('./peer-discovery');
 const zerotier = require('./zerotier');
 const guestInstaller = require('./guest-installer');
 const clipboardSync = require('./clipboard-sync');
+const apiHubBridge = require('./api-hub-bridge');
 
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
@@ -424,6 +425,7 @@ async function buildState() {
     devices: deviceList,
     connectivity,
     agent: agent.publicState(),
+    hub: apiHubBridge.getPublicHubState(),
     pairing: (() => { try { return guestPackager.ensurePairingConfig(); } catch { return null; } })(),
     peerDiscovery: peerDiscovery.getLastDiscovery(),
     job,
@@ -474,6 +476,7 @@ const STATIC = {
   '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/terminal.js': { file: 'terminal.js', type: 'text/javascript; charset=utf-8' },
+  '/hub.js': { file: 'hub.js', type: 'text/javascript; charset=utf-8' },
   '/vendor/xterm.js': { file: 'vendor/xterm.js', type: 'text/javascript; charset=utf-8' },
   '/vendor/xterm.css': { file: 'vendor/xterm.css', type: 'text/css; charset=utf-8' },
   '/vendor/addon-fit.js': { file: 'vendor/addon-fit.js', type: 'text/javascript; charset=utf-8' }
@@ -1150,6 +1153,83 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, result);
     } catch (error) {
       sendJson(res, 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/devices/bind-account') {
+    const body = await readBody(req);
+    try {
+      const result = await apiHubBridge.bindLocalDeviceToAccount(
+        String(body.deviceId || '').trim(),
+        body.userId ? Number(body.userId) : 0
+      );
+      stateCache.clear();
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && route === '/api/hub/state') {
+    sendJson(res, 200, apiHubBridge.getPublicHubState());
+    return;
+  }
+
+  if (req.method === 'GET' && route === '/api/hub/health') {
+    const target = url.searchParams.get('url') || '';
+    sendJson(res, 200, await apiHubBridge.checkGatewayHealth(target));
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/login') {
+    const body = await readBody(req);
+    try {
+      const result = await apiHubBridge.loginAdmin(body.serverUrl, body.username, body.password);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/logout') {
+    sendJson(res, 200, apiHubBridge.logoutAdmin());
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/sync-host-binding') {
+    try {
+      sendJson(res, 200, await apiHubBridge.syncHostBindingToGateway());
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && route === '/api/hub/sync-devices') {
+    try {
+      const r = await apiHubBridge.syncGatewayDevicesToLocal();
+      stateCache.clear();
+      sendJson(res, 200, r);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
+    }
+    return;
+  }
+
+  if (route.startsWith('/api/hub/admin/')) {
+    const subPath = route.slice('/api/hub/admin'.length);
+    const body = (req.method === 'GET' || req.method === 'HEAD') ? undefined : await readBody(req);
+    try {
+      const result = await apiHubBridge.hubFetch(req.method, '/api/admin' + subPath + url.search, body);
+      if (subPath === '/password' && result && result.token) {
+        apiHubBridge.writeHubState({ token: result.token });
+      }
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, error.statusCode || 400, { ok: false, error: String(error && error.message ? error.message : error) });
     }
     return;
   }

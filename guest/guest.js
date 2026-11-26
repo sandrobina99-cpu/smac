@@ -5,8 +5,98 @@ const $ = sel => document.querySelector(sel);
 const state = {
   data: null,
   profileDirty: false,
-  busy: false
+  busy: false,
+  revealApiKey: false
 };
+
+function fmtCompact(v) {
+  const n = Math.max(0, Number(v) || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+  return Math.round(n).toLocaleString('en-US');
+}
+
+function maskApiKey(k) {
+  if (!k) return '—';
+  if (k.length <= 14) return k.slice(0, 4) + '••••••••';
+  return k.slice(0, 10) + '••••••••••••' + k.slice(-6);
+}
+
+function renderAccount(data) {
+  const acc = data.account || {};
+  const chip = $('#chipAccount');
+  const chipText = $('#chipAccountText');
+  const loginBox = $('#accountLoginBox');
+  const dashBox = $('#accountDashBox');
+  const headActions = $('#accountHeadActions');
+
+  if (acc.loggedIn) {
+    const label = (acc.displayName || acc.username || '已登录') + (acc.username ? ' (@' + acc.username + ')' : '');
+    if (chip) chip.dataset.state = 'ok';
+    if (chipText) chipText.textContent = label;
+    if (loginBox) loginBox.hidden = true;
+    if (dashBox) dashBox.hidden = false;
+    if (headActions) headActions.hidden = false;
+    if ($('#accountUserBadge')) $('#accountUserBadge').textContent = '已登录 · ' + label;
+
+    const prof = acc.profile || {};
+    const apiInfo = prof.api || {};
+    const quota = prof.quota || { usedWeighted: 0, weeklyLimit: 0, remainingWeighted: 0, usagePercent: 0 };
+    const models = Array.isArray(prof.models) ? prof.models : [];
+    const bound = Array.isArray(prof.boundDevices) ? prof.boundDevices : [];
+
+    if ($('#accBaseUrl')) $('#accBaseUrl').textContent = apiInfo.baseUrl || ((acc.gatewayUrl || '') + '/v1');
+    if ($('#accApiKeyMask')) {
+      $('#accApiKeyMask').textContent = state.revealApiKey ? (apiInfo.apiKey || '—') : maskApiKey(apiInfo.apiKey || '');
+    }
+    if ($('#btnToggleApiKey')) $('#btnToggleApiKey').textContent = state.revealApiKey ? '隐藏' : '显示';
+
+    const pct = Math.min(100, Math.round(Number(quota.usagePercent) || 0));
+    if ($('#accQuotaUsed')) $('#accQuotaUsed').textContent = fmtCompact(quota.usedWeighted);
+    if ($('#accQuotaLimit')) $('#accQuotaLimit').textContent = fmtCompact(quota.weeklyLimit);
+    if ($('#accQuotaRemain')) $('#accQuotaRemain').textContent = '剩余 ' + fmtCompact(quota.remainingWeighted);
+    const bar = $('#accQuotaBar');
+    if (bar) {
+      bar.style.width = pct + '%';
+      bar.className = 'acc-bar-fill' + (pct >= 95 ? ' bad' : (pct >= 75 ? ' warn' : ''));
+    }
+    if ($('#accQuotaSub')) {
+      $('#accQuotaSub').textContent = quota.nextReleaseAt
+        ? ('已用 ' + pct + '% · 最早额度将于 ' + new Date(quota.nextReleaseAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) + ' 释放')
+        : ('已用 ' + pct + '% · 7×24h 严格滚动窗口');
+    }
+
+    const devBox = $('#accBoundDevicesList');
+    if (devBox) {
+      devBox.innerHTML = bound.length
+        ? bound.map(d => {
+            const isSelf = d.id === data.deviceId;
+            return '<span class="acc-dev-pill' + (d.connected ? '' : ' off') + (isSelf ? ' self' : '') + '">' +
+              (d.connected ? '● ' : '○ ') + esc(d.deviceName) + (isSelf ? '（本机）' : '') +
+            '</span>';
+          }).join('')
+        : '<span style="font-size:11.5px;color:var(--faint)">点击下方「主动连接主机端」将本机绑定到此账号</span>';
+    }
+
+    if ($('#accModelCount')) $('#accModelCount').textContent = String(models.length);
+    const pills = $('#accModelPills');
+    if (pills) {
+      pills.innerHTML = models.length
+        ? models.map(m => '<span class="acc-model-pill">' + esc(m.id) + ' · ' + esc(m.multiplier) + 'x</span>').join('')
+        : '<span style="font-size:11px;color:var(--faint)">当前账号暂无已授权模型</span>';
+    }
+  } else {
+    if (chip) chip.dataset.state = 'off';
+    if (chipText) chipText.textContent = '未登录';
+    if (loginBox) loginBox.hidden = false;
+    if (dashBox) dashBox.hidden = true;
+    if (headActions) headActions.hidden = true;
+    if ($('#accGatewayUrl') && !$('#accGatewayUrl').value && acc.gatewayUrl) {
+      $('#accGatewayUrl').value = acc.gatewayUrl;
+    }
+  }
+}
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -55,6 +145,7 @@ function post(url, body) {
 
 function render(data) {
   state.data = data;
+  renderAccount(data);
   const m = data.machine || {};
   const hp = data.hostProfile || {};
   const zt = data.zerotier || {};
@@ -345,6 +436,92 @@ function wire() {
       toast('本机配对码已复制', 'ok', 2500);
     }
   });
+
+  // 账号体系登录 / 退出 / 刷新 / 复制 Key / 测试连通
+  const doAccountLogin = async () => {
+    const errBox = $('#accLoginError');
+    if (errBox) errBox.hidden = true;
+    const gatewayUrl = ($('#accGatewayUrl') && $('#accGatewayUrl').value.trim()) || 'https://hub.sandrobina.me';
+    const username = ($('#accUsername') && $('#accUsername').value.trim()) || '';
+    const password = ($('#accPassword') && $('#accPassword').value) || '';
+    if (!username || !password) {
+      if (errBox) { errBox.textContent = '请输入管理员分配的账号和密码'; errBox.hidden = false; }
+      return;
+    }
+    const btn = $('#btnAccountLogin');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = '登录并绑定中…';
+    try {
+      const res = await post('/api/account/login', { gatewayUrl, username, password });
+      if ($('#accPassword')) $('#accPassword').value = '';
+      toast('账号登录成功，已拉取主机配置并将本机绑定至账号 ' + username, 'ok', 4500);
+      await refresh();
+    } catch (err) {
+      if (errBox) { errBox.textContent = err.message; errBox.hidden = false; }
+      toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  };
+  if ($('#btnAccountLogin')) $('#btnAccountLogin').addEventListener('click', doAccountLogin);
+  if ($('#accPassword')) {
+    $('#accPassword').addEventListener('keydown', e => { if (e.key === 'Enter') doAccountLogin(); });
+  }
+  if ($('#btnLogoutAccount')) {
+    $('#btnLogoutAccount').addEventListener('click', async () => {
+      await post('/api/account/logout', {}).catch(() => {});
+      state.revealApiKey = false;
+      toast('已退出账号', 'info');
+      await refresh();
+    });
+  }
+  if ($('#btnRefreshAccount')) {
+    $('#btnRefreshAccount').addEventListener('click', async () => {
+      try {
+        await post('/api/account/refresh', {});
+        toast('已刷新最新配额、模型与绑定设备列表', 'ok', 2000);
+        await refresh();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+  if ($('#btnToggleApiKey')) {
+    $('#btnToggleApiKey').addEventListener('click', () => {
+      state.revealApiKey = !state.revealApiKey;
+      if (state.data) renderAccount(state.data);
+    });
+  }
+  if ($('#btnCopyBaseUrl')) {
+    $('#btnCopyBaseUrl').addEventListener('click', async () => {
+      const v = $('#accBaseUrl') ? $('#accBaseUrl').textContent.trim() : '';
+      if (!v || v === '—') return;
+      try { await navigator.clipboard.writeText(v); toast('API Base URL 已复制', 'ok', 1800); } catch { }
+    });
+  }
+  if ($('#btnCopyApiKey')) {
+    $('#btnCopyApiKey').addEventListener('click', async () => {
+      const key = state.data && state.data.account && state.data.account.profile && state.data.account.profile.api && state.data.account.profile.api.apiKey;
+      if (!key) return;
+      try { await navigator.clipboard.writeText(key); toast('专属 API Key 已复制', 'ok', 1800); } catch { }
+    });
+  }
+  if ($('#btnTestApiKey')) {
+    $('#btnTestApiKey').addEventListener('click', async () => {
+      const btn = $('#btnTestApiKey');
+      btn.disabled = true;
+      btn.textContent = '测试中…';
+      try {
+        const r = await post('/api/account/test-key', {});
+        toast('API 连通正常 · 延迟 ' + r.latencyMs + 'ms · 可用模型 ' + r.allowedModelCount + ' 个', 'ok', 4200);
+      } catch (err) {
+        toast('测试失败：' + err.message, 'error', 5000);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '测连通';
+      }
+    });
+  }
 }
 
 wire();

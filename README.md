@@ -1,94 +1,74 @@
-# smac — 跨平台主机端：文件同步 · 多设备剪贴板 · 远程终端 · 无头 Agent
+# smac — 统一跨平台主机中枢 · 客机管理 · API 分发与配额网关
 
-`smac` 是一个可部署在任意 Windows / macOS / Linux 电脑上的通用主机控制台。**全新安装默认不包含任何 SSH 连接配置、密钥或第三方组网 ID**，任何机器解压即可作为主机使用，支持通过自己的 **局域网 / Tailscale / ZeroTier** 组建 SSH 连接。
+`smac` 将 **跨平台主机/客机文件同步、多设备剪贴板、远程终端、无头 Agent** 与 **自托管 API 分发配额网关（原 Sandrobina API Hub）** 完整融合为一套统一软件体系：
 
-## 核心能力
-
-- **零预置通用主机**：首次启动完全空白（`devices.json` 为空、ZeroTier 组号留空），所有连接、密钥和组网配置均只保存在当前主机的 `~/.smac/` 与 `~/.ssh/` 下，绝不内置他人配置。
-- **三通道自动优选 SSH**：每台远程设备可同时填写 **局域网地址 + Tailscale IP + ZeroTier IP**，连接时严格按 **局域网 → Tailscale → ZeroTier** 优先级自动探测与切换。
-- **双向文件夹同步**：本机文件夹与任意已添加的远程设备（Windows / macOS / Linux）双向同步，冲突自动保留两份，删除进回收站（`.smac-trash`）。
-- **多设备剪贴板同步**：可在控制台自由勾选 **1 台或多台** 远程设备（支持 Windows / macOS / Linux），在「本机 ⇄ 所选全部设备」之间双向同步文本与图片。
-- **一键生成本机专属客机包**：主机端点击「下载客机端安装包」会动态生成 `smac-guest-setup.zip`，自动内嵌**当前主机**新生成的 SSH 公钥、配对令牌、局域网/Tailscale 地址以及你自行配置的 ZeroTier 组号（可选）。支持 Windows 与 macOS/Linux 客机。
-- **远程 SSH 终端 & 无头远程 Agent**：内置浏览器多标签 xterm 终端；支持远程静默安装并无头调用客机的 DeepSeek Harness / Hermes / Codex / Claude Code / Gemini·Antigravity / OpenCode，不弹窗不打扰客机使用。
+- **恒星（Star）主机管理端**：全局唯一管理员最高权限，统一掌控设备同步、远程终端、无头 Agent、账号管理、个人 API Key 分发、7×24h 滚动 Token 配额、模型权限 ACL 以及所有客机的账号归属。
+- **卫星（Satellite）客机客户端**：使用管理员分配的账号密码登录，一站式查看个人 API Key / 7×24h 滚动额度 / 可用模型 / AI 对话测试 / CLI 一键配置，并支持 **主动连接主机 / 主动断联主机**；**一个账号下可同时绑定多台客机**，所有客机设备卡片均清晰标注所属账号。
 
 ---
 
-## 快速开始
+## 仓库结构（Unified Monorepo）
 
-### 1. 启动主机控制台
-
-- **Windows 主机端 (`smac-host-windows.zip`)**：
-  1. 解压到任意目录；
-  2. 双击 **`一键启动主机控制台.cmd`**（或在 PowerShell 执行 `.\smac.ps1 web`）；
-  3. 浏览器自动打开 `http://127.0.0.1:8788/`（端口被占用会自动顺延）。
-
-- **macOS / Linux 主机端 (`smac-host-macos.zip`)**：
-  1. 解压到任意目录；
-  2. macOS 双击 **`一键启动主机控制台.command`**（首次若提示未验证开发者，右键 → 打开），Linux 执行 `./smac.sh web`；
-  3. 浏览器自动打开 `http://127.0.0.1:8788/`。
-
-> 环境要求：主机需已安装 Node.js（18+）。发行包已内置纯 JS 依赖（`ssh2`、`ws`、xterm、KaTeX），无需额外编译或联网即可直接启动；若 `web/node_modules` 缺失，启动脚本也会自动运行 `npm install --omit=optional`。
-
-### 2. 添加远程设备（局域网 / Tailscale / ZeroTier）
-
-进入控制台顶部 **「远程设备 · 客机」**：
-
-- **方式 A：手动添加 SSH 设备**
-  点击 **「添加设备」**，填写：
-  - **主机地址**：局域网 IP（如 `192.168.1.20`）或公网域名；
-  - **Tailscale / 备用地址（可选）**：如 `100.x.x.x`；
-  - **ZeroTier IP（可选）**：如 `10.x.x.x`；
-  - **认证方式**：本机 SSH 私钥（如 `~/.ssh/id_ed25519`）或登录密码。
-  保存后即可点击「测试」、「SSH 终端」、添加同步目录、勾选剪贴板同步或启动远程 Agent。
-
-- **方式 B：用自己的 ZeroTier 组网（可选）**
-  在「远程设备 · 客机」页顶部的 **ZeroTier 外网穿透** 栏输入你自己在 [my.zerotier.com](https://my.zerotier.com/) 创建的 **16 位 ZeroTier 组号**，点击 **「保存并入组」**。之后导出的客机安装包会自动内置该组号，或可在已连接设备卡片上点「同组 ZeroTier」远程入组。
-
-- **方式 C：一键生成客机端安装包自动配对**
-  点击 **「下载客机端安装包」**，把动态生成的 `smac-guest-setup.zip` 发给客机解压：
-  - Windows 客机双击 `一键安装客机端.cmd`；
-  - macOS 客机双击 `一键安装客机端(Mac).command`；
-  - Linux 客机执行 `bash ./install-guest.sh`。
-  安装完成后客机自动开启 SSH、写入本机公钥并按 局域网 → Tailscale → ZeroTier 顺序回连注册；若跨网段未自动回连，复制窗口输出的 `SMAC-GUEST://...` 配对码在主机控制台粘贴即可一键接入。
-
----
-
-## 剪贴板同步（多设备可选）
-
-在「文件中枢」右侧 **「剪贴板同步」** 面板：
-
-1. 在 **「同步设备」** 区域勾选任意 1 台或多台已添加设备（支持 Windows / macOS / Linux）；
-2. 点击 **「立即同步一次」** 或 **「启动」** 后台守护（默认每 2 秒检查一次）；
-3. 任意一台勾选设备（含本机）复制新文本或截图后，会自动同步到本机及所有其他已勾选的在线设备；部分设备离线时不影响其他设备同步。
-
----
-
-## 命令行参考
-
-### Windows (`smac.ps1`)
-```powershell
-.\smac.ps1 web                         # 启动网页控制台
-.\smac.ps1 web stop                    # 停止网页控制台
-.\smac.ps1 send "D:\文件.pdf" --device <设备名>
-.\smac.ps1 sync add "D:\项目" "~/Documents/项目" --device <设备名>
-.\smac.ps1 sync now                    # 立即同步全部
-.\smac.ps1 sync start | stop | status  # 后台同步守护
-.\smac.ps1 config                      # 查看当前配置
+```text
+smac/
+├── web/                  # smac 主机端独立窗口控制台（文件中枢 / 远程设备 / 远程 Agent / API 分发与账号）
+├── guest/                # smac 客机端独立窗口控制台（账号登录 / API 额度 / 主动连断主机 / 环境检测）
+├── agent/                # 远程无头 Agent 包装与环境探测脚本
+├── macos/                # macOS 原生 Cocoa + WKWebView 独立窗口封装、恒星/卫星图标与 DMG 构建脚本
+├── packages/shared/      # 共享 TypeScript 类型（用户、配额、模型、客机归属、主机绑定）与格式化工具
+├── apps/gateway/         # Node 24 + node:sqlite + Express 5 自托管 API 分发与账号设备归属网关
+├── apps/admin-desktop/   # Electron + React + Vite smac 管理端桌面应用（恒星图标）
+├── apps/client-desktop/  # Electron + React + Vite smac 客户端桌面应用（卫星图标）
+└── package-editions.ps1  # Windows / macOS 一键纯净发行包与独立窗口启动器打包脚本
 ```
 
-### macOS / Linux (`smac.sh`)
+---
+
+## 核心架构特性
+
+### 1. 唯一管理员最高权限 & 1 账号 → 多台客机
+- 网关 SQLite 数据库内置 `enforce_single_admin` 触发器，强制保障**管理员账号唯一**，以主机管理端为最高管理权限。
+- `guest_devices` 表支持 **1 个账号绑定多台客机**（Windows / macOS / Linux），每台客机在主机端「远程设备 · 客机」及管理端「客机设备归属」面板均标注 **所属账号**。
+- 管理员可在主机端一键将任意客机绑定或改绑至目标账号，或撤销接入；普通账号不可劫持他人已绑定的客机（返回 HTTP `403`）。
+
+### 2. API Key 分发、7×24h 严格滚动配额与模型权限
+- **7×24h（168 小时）严格滚动窗口**：按 `weighted_tokens = Math.ceil(total_tokens * multiplier)` 实时扣费并自动回滚释放，耗尽返回 HTTP `429`（`weekly_quota_exceeded`）与 `X-Quota-*` / `Retry-After` 响应头。
+- **精细模型 ACL**：支持默认全开（黑名单剔除）或严格白名单模式，同时过滤 `/v1/models` 的标准 `data[]` 与 Codex `models[]`，未授权模型拦截返回 `404` / `403`。
+- **实时 SSE 推送**：`/api/client/stream` 实时同步配额变化、Key 轮换、模型权限与客机绑定状态。
+- **AI 对话测试 & 本地 CLI 一键接入**：客户端内置流式对话测试台（支持按模型动态切换 `reasoning_effort`）及 Codex CLI / Claude Code / OpenCode / Hermes / Factory Droid / Aider / Qwen Code 写前备份与一键配置。
+
+### 3. 跨平台文件同步、拖拽直传、多设备剪贴板与远程终端
+- **三通道自动优选 SSH**：局域网 → Tailscale → ZeroTier 自动探测切换。
+- **双向文件夹同步 & 拖拽直传桌面**：支持拖拽任意文件、图片、压缩包、文件夹直传目标设备桌面；同步目录双向防重并支持任意客机自动识别工作区。
+- **多设备剪贴板 & 无头远程 Agent**：支持自由勾选多台客机同步文本/图片，并内置浏览器多标签 xterm SSH 终端与远程无头 Agent 调度。
+
+---
+
+## 快速开发与构建
+
+### 环境要求
+- Node.js **24+**（网关使用内置 `node:sqlite`）
+
+### 安装、构建与测试（Monorepo）
 ```bash
-./smac.sh web                          # 启动网页控制台
-./smac.sh web stop                     # 停止网页控制台
-./smac.sh sync now                     # 立即同步全部
-./smac.sh sync start | stop            # 后台同步守护
-./smac.sh status                       # 查看运行状态
+npm install
+npm run build
+npm test
+npx tsc --noEmit -p apps/gateway/tsconfig.json
+npx tsc --noEmit -p apps/admin-desktop/tsconfig.json
+npx tsc --noEmit -p apps/client-desktop/tsconfig.json
+npx tsc --noEmit -p apps/admin-desktop/tsconfig.electron.json
+npx tsc --noEmit -p apps/client-desktop/tsconfig.electron.json
 ```
+
+### 启动本地主机控制台 / 客机控制台
+- **Windows**：双击 `smac-host.exe`（或桌面「smac 主机控制台」快捷方式）/ `guest\smac-guest.exe`（或「smac 客机控制台」）；重新打包发行版运行 `.\package-editions.ps1`。
+- **macOS**：运行 `bash macos/build-mac-apps.sh` 生成 `/Applications/smac 主机控制台.app`、`/Applications/smac 客机控制台.app` 与可拖拽安装镜像 `dist/smac-host-macos.dmg`、`dist/smac-guest-macos.dmg`。
+- **Electron 桌面端打包**：`npm run pack:admin:mac` / `pack:admin:win` / `pack:client:mac` / `pack:client:win`（亦支持 GitHub Actions 自动双端构建）。
 
 ---
 
-## 本地数据与安全边界
-
-- 所有运行时配置保存在当前用户的 `~/.smac/`（`config.json`、`devices.json`、`guest-pairing.json`、`agent-credentials.json`），与程序安装目录完全分离。
-- 控制台 HTTP 与 WebSocket 终端服务仅监听 `127.0.0.1`，不向局域网/公网暴露。
-- 主机指纹首次连接自动记录（TOFU），后续指纹变动会阻断连接，需人工确认并在设备编辑中重置。
+## 安全边界
+- 严禁提交 `.env`、`hub.db`、`.master.key`、SSH 私钥、管理员密码或任何真实上游/分发 API 密钥。
+- 主机端和客机端运行时数据完全隔离保存在当前用户的 `~/.smac/` 与 `~/.smac-guest/` 目录，控制台本地监听 `127.0.0.1`。
+- 网关密钥使用 AES-256-GCM 加密，密码使用 `scrypt`，会话 Token 采用带 `token_version` 校验的 HMAC-SHA256。

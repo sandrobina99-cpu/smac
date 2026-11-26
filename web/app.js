@@ -1760,26 +1760,33 @@ async function saveSyncRemoteDir() {
 function applyView(view, updateHash) {
   const remote = view === 'remote';
   const agentViewMode = view === 'agent';
+  const hubViewMode = view === 'hub';
   const dash = $('#dashView');
   const remoteView = $('#remoteView');
   const agentView = $('#agentView');
+  const hubView = $('#hubView');
   if (!dash || !remoteView || !agentView) return;
-  dash.hidden = remote || agentViewMode;
+  dash.hidden = remote || agentViewMode || hubViewMode;
   remoteView.hidden = !remote;
   agentView.hidden = !agentViewMode;
-  document.body.dataset.view = agentViewMode ? 'agent' : (remote ? 'remote' : 'files');
+  if (hubView) hubView.hidden = !hubViewMode;
+  const activeKey = hubViewMode ? 'hub' : (agentViewMode ? 'agent' : (remote ? 'remote' : 'files'));
+  document.body.dataset.view = activeKey;
   $$('#viewSwitch .view-btn').forEach(button => {
-    button.classList.toggle('active', button.dataset.view === (agentViewMode ? 'agent' : (remote ? 'remote' : 'files')));
+    button.classList.toggle('active', button.dataset.view === activeKey);
   });
   if (updateHash) {
-    const target = agentViewMode ? '#agent' : (remote ? '#remote' : location.pathname + location.search);
-    if (agentViewMode ? location.hash !== '#agent' : (remote ? location.hash !== '#remote' : location.hash)) {
+    const target = hubViewMode ? '#hub' : (agentViewMode ? '#agent' : (remote ? '#remote' : location.pathname + location.search));
+    if (hubViewMode ? location.hash !== '#hub' : (agentViewMode ? location.hash !== '#agent' : (remote ? location.hash !== '#remote' : location.hash))) {
       history.replaceState(null, '', target);
     }
   }
   if (remote && window.SmacRemote) {
     window.SmacRemote.init();
     window.SmacRemote.activate();
+  }
+  if (hubViewMode && window.SmacHub) {
+    window.SmacHub.activate();
   }
   if (agentViewMode) refreshAgentOptions(true);
   window.scrollTo(0, 0);
@@ -1788,6 +1795,7 @@ function applyView(view, updateHash) {
 function setView(view) {
   applyView(view, true);
 }
+window.setView = setView;
 
 // ---------- wiring ----------
 
@@ -2056,7 +2064,7 @@ function wire() {
     if (button) setView(button.dataset.view);
   });
   window.addEventListener('hashchange', () => {
-    const view = location.hash === '#remote' ? 'remote' : (location.hash === '#agent' ? 'agent' : 'files');
+    const view = location.hash === '#hub' ? 'hub' : (location.hash === '#remote' ? 'remote' : (location.hash === '#agent' ? 'agent' : 'files'));
     if (view !== document.body.dataset.view) applyView(view, false);
   });
   if (window.SmacRemote) window.SmacRemote.init();
@@ -2393,7 +2401,7 @@ function wire() {
 
 async function boot() {
   wire();
-  applyView(location.hash === '#remote' ? 'remote' : (location.hash === '#agent' ? 'agent' : 'files'), false);
+  applyView(location.hash === '#hub' ? 'hub' : (location.hash === '#remote' ? 'remote' : (location.hash === '#agent' ? 'agent' : 'files')), false);
   const footAddr = $('#footAddr');
   if (footAddr && location.host) footAddr.textContent = location.host;
   if (new URLSearchParams(location.search).has('add')) {

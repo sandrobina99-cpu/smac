@@ -79,6 +79,11 @@ function cleanDevice(raw) {
     zerotierIp: String(raw.zerotierIp || '').trim(),
     zerotierStatus: String(raw.zerotierStatus || '').trim(),
     zerotierNetworkId: String(raw.zerotierNetworkId || '').trim(),
+    accountId: Number(raw.accountId) || 0,
+    accountUsername: String(raw.accountUsername || '').trim(),
+    accountDisplayName: String(raw.accountDisplayName || '').trim(),
+    accountEnabled: raw.accountEnabled !== false,
+    gatewayDeviceId: String(raw.gatewayDeviceId || '').trim(),
     guestDisconnected: Boolean(raw.guestDisconnected),
     guestEnv: raw.guestEnv && typeof raw.guestEnv === 'object' ? raw.guestEnv : null,
     createdAt: raw.createdAt || nowIso(),
@@ -147,6 +152,11 @@ function publicDevice(device) {
     zerotierIp: device.zerotierIp || '',
     zerotierStatus: device.zerotierStatus || '',
     zerotierNetworkId: device.zerotierNetworkId || '',
+    accountId: Number(device.accountId) || 0,
+    accountUsername: device.accountUsername || '',
+    accountDisplayName: device.accountDisplayName || '',
+    accountEnabled: device.accountEnabled !== false,
+    gatewayDeviceId: device.gatewayDeviceId || '',
     guestDisconnected: Boolean(device.guestDisconnected),
     guestEnv: device.guestEnv || null,
     createdAt: device.createdAt,
@@ -154,6 +164,21 @@ function publicDevice(device) {
     lastConnectedAt: device.lastConnectedAt,
     lastError: device.lastError
   };
+}
+
+function setDeviceAccountBinding(id, binding) {
+  const devices = readDevices();
+  const target = devices.find(d => d.id === id);
+  if (!target) return null;
+  if (binding.accountId !== undefined) target.accountId = Number(binding.accountId) || 0;
+  if (binding.accountUsername !== undefined) target.accountUsername = String(binding.accountUsername || '').trim();
+  if (binding.accountDisplayName !== undefined) target.accountDisplayName = String(binding.accountDisplayName || '').trim();
+  if (binding.accountEnabled !== undefined) target.accountEnabled = binding.accountEnabled !== false;
+  if (binding.gatewayDeviceId !== undefined) target.gatewayDeviceId = String(binding.gatewayDeviceId || '').trim();
+  if (binding.guestDisconnected !== undefined) target.guestDisconnected = Boolean(binding.guestDisconnected);
+  target.updatedAt = nowIso();
+  writeDevices(devices);
+  return publicDevice(target);
 }
 
 function disconnectDeviceSessions(id) {
@@ -688,6 +713,7 @@ module.exports = {
   removeDevice,
   resetHostKey,
   testDevice,
+  setDeviceAccountBinding,
   disconnectDeviceSessions,
   attachUpgrade
 };

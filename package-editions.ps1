@@ -441,7 +441,8 @@ function Copy-CleanTree([string]$SrcDir, [string]$DstDir, [switch]$StripWindowsB
     $_.Extension -in @('.node', '.dll', '.dylib', '.so', '.log', '.pid', '.tmp', '.bak') -or
     ($StripWindowsBinaries -and $_.Extension -in @('.exe', '.ico')) -or
     $_.Name -in @(
-      'host-pairing.json', 'guest-pairing.json', 'devices.json', 'config.json',
+      'host-pairing.json', 'guest-pairing.json', 'hub-admin.json', 'account-session.json',
+      'devices.json', 'config.json',
       'agent-credentials.json', 'bootstrap-peer.json', 'sync-status.json',
       'clip-status.json', 'clipboard-state.json', 'clipboard-multi-state.json',
       'host-profile.json', 'host-profile.seed.json', 'pairing-code.txt',

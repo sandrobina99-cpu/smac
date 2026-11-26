@@ -171,6 +171,11 @@
     const savedPassword = device.auth === 'password' && device.hasPassword
       ? '<span class="tag" title="明文保存在本机，用于后台同步和发送">密码已保存</span>'
       : '';
+    const accountTag = device.accountUsername
+      ? '<span class="tag account-tag' + (device.accountEnabled === false ? ' bad' : '') + '" title="归属账号：' + esc((device.accountDisplayName || device.accountUsername) + ' (@' + device.accountUsername + ')') + '">' +
+          '所属账号 · ' + esc(device.accountDisplayName || device.accountUsername) + ' (@' + esc(device.accountUsername) + ')' + (device.accountEnabled === false ? ' [已禁用]' : '') +
+        '</span>'
+      : '<span class="tag account-tag unbound" title="尚未绑定到任何用户账号，点击下方「绑定账号」进行分配">未绑定账号</span>';
     const last = device.lastConnectedAt
       ? '上次连接 ' + esc(relativeTime(device.lastConnectedAt))
       : (device.lastError ? esc(device.lastError) : '尚未连接');
@@ -203,6 +208,7 @@
           '<span class="badge" data-state="' + badgeState + '">' + badgeText + '</span>' +
         '</div>' +
         '<div class="device-tags">' +
+          accountTag +
           osTag(device.os) +
           '<span class="tag"><svg><use href="#i-' + (device.auth === 'password' ? 'shield' : 'key') + '"/></svg>' + (device.auth === 'password' ? '密码' : '私钥') + '</span>' +
           savedPassword +
@@ -212,6 +218,7 @@
         envHtml +
         '<div class="device-note' + (device.lastError && !device.lastConnectedAt ? ' bad' : '') + '">' + last + '</div>' +
         '<div class="device-quick-row">' +
+          '<button class="btn ghost tiny" data-action="bind-account" title="为该客机分配或切换归属账号（支持同一账号下绑定多台客机）"><svg><use href="#i-shield"/></svg>' + (device.accountUsername ? '换绑账号' : '绑定账号') + '</button>' +
           '<button class="btn ghost tiny" data-action="sync-add" title="由本机确定与该客机同步的文件夹"><svg><use href="#i-folder"/></svg>定同步目录</button>' +
           '<button class="btn ghost tiny" data-action="send-desktop" title="发送文件或文件夹到该客机桌面"><svg><use href="#i-send"/></svg>发到客机桌面</button>' +
           '<button class="btn ghost tiny" data-action="open-agent" title="后台无头复用该客机的 CLI 或桌面端订阅操作同步文件夹"><svg><use href="#i-server"/></svg>无头 Agent</button>' +
@@ -1032,6 +1039,8 @@
             loadDevices();
           })
           .catch(err => notify(err.message, 'error'));
+      } else if (action === 'bind-account' && typeof window.SmacHub === 'object') {
+        window.SmacHub.openBindDeviceModal(device);
       } else if (action === 'sync-add' && typeof window.SmacHostActions === 'object') {
         window.SmacHostActions.openAddSyncForDevice(device.id);
       } else if (action === 'send-desktop' && typeof window.SmacHostActions === 'object') {
