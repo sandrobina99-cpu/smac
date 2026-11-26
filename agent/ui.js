@@ -103,6 +103,8 @@
     codex: 'Codex CLI',
     claude: 'Claude Code',
     agy: 'Gemini · Antigravity',
+    workbuddy: 'WorkBuddy · CodeBuddy',
+    qoder: 'Qoder CLI',
     opencode: 'OpenCode CLI'
   };
 
@@ -115,6 +117,8 @@
     if (value === 'codex') { return 'Codex'; }
     if (value === 'claude') { return 'Claude'; }
     if (value === 'agy') { return 'Gemini'; }
+    if (value === 'workbuddy') { return 'WorkBuddy'; }
+    if (value === 'qoder') { return 'Qoder'; }
     if (value === 'opencode') { return 'OpenCode'; }
     return 'Hermes';
   }
@@ -734,8 +738,10 @@
       : state.backend === 'codex' ? 'ChatGPT（Codex）'
         : state.backend === 'claude' ? 'Claude Code'
           : state.backend === 'agy' ? 'Gemini · Antigravity'
-            : state.backend === 'opencode' ? 'OpenCode'
-              : 'Hermes';
+            : state.backend === 'workbuddy' ? 'WorkBuddy · CodeBuddy'
+              : state.backend === 'qoder' ? 'Qoder CLI（CN / 国际版）'
+                : state.backend === 'opencode' ? 'OpenCode'
+                  : 'Hermes';
     wrap.innerHTML =
       '<div class="empty-logo">◈</div>' +
       '<h1>远端 ' + escapeHtml(backendLabel(state.backend)) + '</h1>' +
@@ -1828,7 +1834,7 @@
     const info = modelReasoningInfo();
     const fallback = state.backend === 'claude' || state.backend === 'agy'
       ? ['low', 'medium', 'high', 'xhigh', 'max']
-      : DEFAULT_REASONING_LEVELS;
+      : (state.backend === 'qoder' ? ['low', 'medium', 'high'] : DEFAULT_REASONING_LEVELS);
     const levels = info && Array.isArray(info.levels) && info.levels.length
       ? info.levels.filter(level => REASONING_LABELS[level])
       : fallback;
@@ -2077,6 +2083,14 @@
         const ready = Boolean(current.codex) && !current.codexAuthError;
         stateEl.textContent = ready ? 'Codex 已就绪' : (current.codex ? 'Codex 未登录' : '未找到 Codex');
         stateEl.style.color = ready ? 'var(--green)' : 'var(--red)';
+      } else if (state.backend === 'workbuddy') {
+        const ready = Boolean(current.workbuddy);
+        stateEl.textContent = ready ? 'WorkBuddy 已就绪' : '未找到 WorkBuddy';
+        stateEl.style.color = ready ? 'var(--green)' : 'var(--red)';
+      } else if (state.backend === 'qoder') {
+        const ready = Boolean(current.qoder);
+        stateEl.textContent = ready ? 'Qoder 已就绪' : '未找到 Qoder';
+        stateEl.style.color = ready ? 'var(--green)' : 'var(--red)';
       } else if (state.backend === 'opencode') {
         const ready = Boolean(current.opencode);
         stateEl.textContent = ready ? 'OpenCode 已就绪' : '未找到 OpenCode';
@@ -2102,11 +2116,15 @@
         safety.textContent = 'Agent 运行在远端机器上，使用远端 Claude Code 的登录或访问密钥。Claude 的内置文件 / 命令工具已关闭，只能通过 smac 文件工具读写当前选择的同步目录 / 工作区。';
       } else if (state.backend === 'agy') {
         safety.textContent = 'Agent 运行在客机交互会话后台（零弹窗），自动读取客机 Antigravity 当前登录账号的模型列表；更换付费/免费账号后点「刷新模型」即可实时更新。';
+      } else if (state.backend === 'workbuddy') {
+        safety.textContent = 'Agent 在客机后台无头调用 WorkBuddy 内置 codebuddy-lite-wb 引擎（支持自动区分 CN 国内版与 WorkBuddy AI 国际版），内置命令工具已禁用，仅允许通过 smac MCP 读写当前同步目录；桌面端自定义模型免额外登录即可调用，云端订阅额度需在客机终端 /login 或绑定令牌。';
+      } else if (state.backend === 'qoder') {
+        safety.textContent = 'Agent 在客机后台无头调用 Qoder 内置 qoderclicn（国内版）/ qodercli（国际版）引擎，内置工具已禁用，仅通过 smac MCP 读写当前同步目录；因桌面端受系统安全存储隔离，远程复用同账号额度需在客机终端完成一次 CLI login 或绑定 PAT。';
       } else {
         safety.textContent = 'Agent 运行在远端机器上，使用该机器已登录的 Hermes 额度。模型只能读写当前选择的同步目录 / 工作区，写入前有双重路径校验。';
       }
     }
-    providerSelect.disabled = state.backend !== 'hermes' && state.backend !== 'dsh' && state.backend !== 'codex';
+    providerSelect.disabled = !['hermes', 'dsh', 'codex', 'workbuddy', 'qoder'].includes(state.backend);
     updateComposer();
   }
 
@@ -2118,6 +2136,8 @@
       { id: 'codex', label: 'Codex CLI', ok: Boolean(backends.codex) },
       { id: 'claude', label: 'Claude Code', ok: Boolean(backends.claude) },
       { id: 'agy', label: 'Gemini · Antigravity', ok: Boolean(backends.agy) },
+      { id: 'workbuddy', label: 'WorkBuddy · CodeBuddy', ok: Boolean(backends.workbuddy) },
+      { id: 'qoder', label: 'Qoder CLI（CN / 国际版）', ok: Boolean(backends.qoder) },
       { id: 'opencode', label: 'OpenCode CLI', ok: Boolean(backends.opencode) }
     ];
     backendSelect.replaceChildren();
@@ -2193,6 +2213,10 @@
       setStatus('远端没有找到 Claude Code CLI。', 'err');
     } else if (state.backend === 'agy' && !info.agy) {
       setStatus('远端没有找到 Gemini / Antigravity CLI。', 'err');
+    } else if (state.backend === 'workbuddy' && !info.workbuddy) {
+      setStatus('远端没有检测到 WorkBuddy（CN / 国际版）或 CodeBuddy CLI。', 'err');
+    } else if (state.backend === 'qoder' && !info.qoder) {
+      setStatus('远端没有检测到 Qoder（国内版 CN 或国际版）。', 'err');
     } else if (state.backend === 'hermes' && !info.hermes) {
       setStatus('远端没有找到 Hermes 可执行文件。', 'err');
     }

@@ -1,6 +1,6 @@
 {
   "name": "@sandrobina/client-desktop",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "private": true,
   "author": "sandrobina99-cpu",
   "description": "smac 客户端 — 主机定向握手接入、个人 API 额度、AI 对话测试与 CLI 一键配置",

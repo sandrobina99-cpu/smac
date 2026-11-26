@@ -24,7 +24,7 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const SELECTION_FILE = path.join(DATA_DIR, 'remote-agent.json');
 const CREDENTIALS_FILE = path.join(DATA_DIR, 'agent-credentials.json');
 const AGENT_SRC = path.resolve(__dirname, '..', 'agent');
-const BACKEND_IDS = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'opencode'];
+const BACKEND_IDS = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'workbuddy', 'qoder', 'opencode'];
 const BRIDGE = path.join(__dirname, 'ssh-bridge.js');
 const BIND = '127.0.0.1';
 const BASE_PORT = 8799;
@@ -32,7 +32,7 @@ const PORT_TRIES = 7;
 const REMOTE_DIR_NAME = '.smac-agent';
 
 const POSIX_PATH_EXPORT = [
-  'export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.gemini/bin:$HOME/.local/bin:$HOME/.hermes/node/bin:$HOME/.antigravity/antigravity/bin:$PATH"',
+  'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/sbin:$HOME/.gemini/bin:$HOME/.local/bin:$HOME/.hermes/node/bin:$HOME/.antigravity/antigravity/bin:$HOME/.qoder/bin/qodercli:$HOME/.qoder-cn/bin/qoderclicn:$PATH"',
   'for _smac_nvm in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$_smac_nvm" ] && export PATH="$_smac_nvm:$PATH"; done'
 ].join('\n');
 
@@ -249,7 +249,11 @@ function credentialsFor(deviceId) {
     claude: Object.assign({ apiKey: '', oauthToken: '', baseUrl: '' },
       cleanCredentialFields(data.claude, ['apiKey', 'oauthToken', 'baseUrl'])),
     agy: Object.assign({ apiKey: '', baseUrl: '' },
-      cleanCredentialFields(data.agy, ['apiKey', 'baseUrl']))
+      cleanCredentialFields(data.agy, ['apiKey', 'baseUrl'])),
+    workbuddy: Object.assign({ apiKey: '', authToken: '' },
+      cleanCredentialFields(data.workbuddy, ['apiKey', 'authToken'])),
+    qoder: Object.assign({ patCn: '', patGlobal: '' },
+      cleanCredentialFields(data.qoder, ['patCn', 'patGlobal']))
   };
 }
 
@@ -266,6 +270,16 @@ function publicCredentials(deviceId) {
       bound: Boolean(creds.agy.apiKey),
       hasApiKey: Boolean(creds.agy.apiKey),
       baseUrl: creds.agy.baseUrl || ''
+    },
+    workbuddy: {
+      bound: Boolean(creds.workbuddy.apiKey || creds.workbuddy.authToken),
+      hasApiKey: Boolean(creds.workbuddy.apiKey),
+      hasAuthToken: Boolean(creds.workbuddy.authToken)
+    },
+    qoder: {
+      bound: Boolean(creds.qoder.patCn || creds.qoder.patGlobal),
+      hasPatCn: Boolean(creds.qoder.patCn),
+      hasPatGlobal: Boolean(creds.qoder.patGlobal)
     }
   };
 }
@@ -278,10 +292,14 @@ function saveCredentials(deviceId, patch) {
     claude: Object.assign({ apiKey: '', oauthToken: '', baseUrl: '' },
       cleanCredentialFields(current.claude, ['apiKey', 'oauthToken', 'baseUrl'])),
     agy: Object.assign({ apiKey: '', baseUrl: '' },
-      cleanCredentialFields(current.agy, ['apiKey', 'baseUrl']))
+      cleanCredentialFields(current.agy, ['apiKey', 'baseUrl'])),
+    workbuddy: Object.assign({ apiKey: '', authToken: '' },
+      cleanCredentialFields(current.workbuddy, ['apiKey', 'authToken'])),
+    qoder: Object.assign({ patCn: '', patGlobal: '' },
+      cleanCredentialFields(current.qoder, ['patCn', 'patGlobal']))
   };
   const incoming = patch && typeof patch === 'object' ? patch : {};
-  ['claude', 'agy'].forEach(backend => {
+  ['claude', 'agy', 'workbuddy', 'qoder'].forEach(backend => {
     const raw = incoming[backend];
     if (!raw || typeof raw !== 'object') { return; }
     if (raw.clear) {
@@ -1061,10 +1079,22 @@ async function modelsForDevice(deviceId, backend) {
   const probe = await bridge({ op: 'probe', deviceId, timeoutMs: 60000 });
   const osName = probe.os === 'windows' ? 'windows' : 'posix';
 
-  if (backend === 'dsh' || backend === 'codex') {
+  if (backend === 'dsh' || backend === 'codex' || backend === 'workbuddy' || backend === 'qoder') {
     activeDeviceId = deviceId;
     const dir = await remoteDir(device, osName);
     await uploadFile(device, osName, path.join(AGENT_SRC, 'probe-models.js'), dir + '/probe-models.js');
+    if (backend === 'workbuddy' || backend === 'qoder') {
+      const credTmp = path.join(os.tmpdir(), 'smac-probe-creds-' + crypto.randomBytes(4).toString('hex') + '.json');
+      try {
+        fs.writeFileSync(credTmp, JSON.stringify(credentialsFor(deviceId), null, 2), 'utf8');
+        await uploadFile(device, osName, credTmp, dir + '/credentials.json');
+        if (osName !== 'windows') {
+          await remoteScript(osName, "chmod 600 \"$HOME/" + REMOTE_DIR_NAME + "/credentials.json\" 2>/dev/null; echo SMAC_OK");
+        }
+      } finally {
+        try { fs.rmSync(credTmp, { force: true }); } catch { }
+      }
+    }
     const script = osName === 'windows'
       ? [
         "$ErrorActionPreference='SilentlyContinue'",

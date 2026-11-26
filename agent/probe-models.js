@@ -582,10 +582,404 @@ function probeAgy() {
   };
 }
 
+function readAgentCreds() {
+  const data = readJson(path.join(HOME, '.smac-agent', 'credentials.json')) || {};
+  const wb = data.workbuddy && typeof data.workbuddy === 'object' ? data.workbuddy : {};
+  const qoder = data.qoder && typeof data.qoder === 'object' ? data.qoder : {};
+  return {
+    workbuddy: {
+      apiKey: String(wb.apiKey || '').trim(),
+      authToken: String(wb.authToken || '').trim()
+    },
+    qoder: {
+      patCn: String(qoder.patCn || '').trim(),
+      patGlobal: String(qoder.patGlobal || '').trim()
+    }
+  };
+}
+
+function compareSemverDescLocal(a, b) {
+  const pa = String(a || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pb[i] || 0) - (pa[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return String(b || '').localeCompare(String(a || ''));
+}
+
+function winCandidateRootsLocal() {
+  const userName = path.basename(HOME);
+  const roots = [];
+  const add = p => { if (p && !roots.includes(p)) roots.push(p); };
+  add(LOCAL_APP);
+  add(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'));
+  add(process.env.ProgramFiles || 'C:\\Program Files');
+  for (const drive of ['C:', 'D:', 'E:', 'F:']) {
+    add(path.join(drive, 'Users', userName, 'AppData', 'Local'));
+    add(path.join(drive, 'Program Files'));
+  }
+  return roots;
+}
+
+function findBinOnPath(names) {
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  if (!IS_WIN) {
+    for (const extra of ['/opt/homebrew/bin', '/usr/local/bin', path.join(HOME, '.local', 'bin'), path.join(HOME, '.qoder', 'bin', 'qodercli'), path.join(HOME, '.qoder-cn', 'bin', 'qoderclicn')]) {
+      if (!dirs.includes(extra)) dirs.push(extra);
+    }
+  }
+  for (const d of dirs) {
+    for (const n of names) {
+      const f = path.join(d, n);
+      try { if (fs.statSync(f).isFile()) return f; } catch { }
+    }
+  }
+  return '';
+}
+
+function findWorkBuddyEditionsLocal() {
+  const editions = [];
+  const checkEdition = (id, label, isCn, macNames, winRelDirs, dataDirName) => {
+    let cliPath = '';
+    if (IS_MAC) {
+      for (const nm of macNames) {
+        for (const base of ['/Applications', path.join(HOME, 'Applications')]) {
+          const p = path.join(base, nm + '.app', 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'dist', 'codebuddy-lite-wb.mjs');
+          if (fs.existsSync(p)) { cliPath = p; break; }
+        }
+        if (cliPath) break;
+      }
+    } else if (IS_WIN) {
+      for (const root of winCandidateRootsLocal()) {
+        for (const rel of winRelDirs) {
+          const p = path.join(root, rel, 'resources', 'app.asar.unpacked', 'cli', 'dist', 'codebuddy-lite-wb.mjs');
+          if (fs.existsSync(p)) { cliPath = p; break; }
+        }
+        if (cliPath) break;
+      }
+    }
+    const dataDir = path.join(HOME, dataDirName);
+    const customList = readJson(path.join(dataDir, 'models.json'));
+    const customModels = Array.isArray(customList)
+      ? customList.filter(m => m && m.id).map(m => ({ id: 'custom-local:' + String(m.id), name: String(m.name || m.id) }))
+      : [];
+    let desktopLoggedIn = false;
+    try {
+      const entries = fs.readdirSync(path.join(dataDir, 'storage'));
+      desktopLoggedIn = entries.some(e => /^user-/i.test(e));
+    } catch { }
+    if (cliPath) {
+      editions.push({ id, label, isCn, cliPath, dataDir, customModels, desktopLoggedIn });
+    }
+  };
+  checkEdition('workbuddy-cn', 'WorkBuddy CN（国内版）', true, ['WorkBuddy', 'WorkBuddy CN'], ['Programs\\WorkBuddy', 'WorkBuddy'], '.workbuddy');
+  checkEdition('workbuddy-global', 'WorkBuddy AI（国际版）', false, ['WorkBuddy AI', 'WorkBuddyAI'], ['Programs\\WorkBuddyAI', 'Programs\\WorkBuddy AI', 'WorkBuddyAI', 'WorkBuddy AI'], '.workbuddy-ai');
+
+  const standalone = findBinOnPath(IS_WIN ? ['codebuddy.cmd', 'codebuddy.exe'] : ['codebuddy', 'cbc']);
+  if (!editions.length && standalone) {
+    editions.push({
+      id: 'codebuddy-cli',
+      label: 'CodeBuddy CLI',
+      isCn: false,
+      cliPath: standalone,
+      dataDir: path.join(HOME, '.codebuddy'),
+      customModels: [],
+      desktopLoggedIn: false
+    });
+  }
+  return editions;
+}
+
+function parseWorkBuddyModelsFromHelp(helpText) {
+  const m = /Currently supported:\s*\(([^)]+)\)/i.exec(String(helpText || ''));
+  if (!m || !m[1]) return [];
+  return Array.from(new Set(m[1].split(',').map(s => s.trim()).filter(Boolean)));
+}
+
+function probeWorkBuddy() {
+  const editions = findWorkBuddyEditionsLocal();
+  if (!editions.length) {
+    return {
+      backend: 'workbuddy',
+      active: '',
+      defaultProvider: '',
+      defaultModel: '',
+      missing: true,
+      error: '客机未检测到 WorkBuddy（CN / 国际版）或 CodeBuddy CLI。',
+      providers: [],
+      modelLabels: {},
+      reasoning: {}
+    };
+  }
+  const creds = readAgentCreds().workbuddy;
+  const hasBoundCred = Boolean(creds.apiKey || creds.authToken);
+  const modelLabels = {};
+  const reasoning = {};
+  const providers = editions.map((ed, idx) => {
+    const env = Object.assign({}, process.env, {
+      PATH: (IS_WIN ? '' : '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:') + String(process.env.PATH || ''),
+      CODEBUDDY_CONFIG_DIR: ed.dataDir,
+      WORKBUDDY_CONFIG_DIR: ed.dataDir,
+      CODEBUDDY_FORCE_LITE_WB_BUNDLE: '1',
+      NO_COLOR: '1'
+    });
+    if (ed.isCn) env.CODEBUDDY_CN = '1';
+    let parsed = [];
+    try {
+      const cmd = /\.(?:c|m)?js$/i.test(ed.cliPath) ? process.execPath : ed.cliPath;
+      const args = /\.(?:c|m)?js$/i.test(ed.cliPath) ? [ed.cliPath, '--help'] : ['--help'];
+      const r = spawnSync(cmd, args, { env, encoding: 'utf8', timeout: 15000, windowsHide: true });
+      parsed = parseWorkBuddyModelsFromHelp(String((r && r.stdout) || '') + '\n' + String((r && r.stderr) || ''));
+    } catch { }
+    const customIds = ed.customModels.map(m => m.id);
+    const cloudIds = parsed.filter(id => !id.startsWith('custom-local:'));
+    // 若未绑定云端 CLI 凭据且存在自定义模型，优先把免额外登录的自定义模型排在最前
+    const ordered = (!hasBoundCred && customIds.length)
+      ? Array.from(new Set(customIds.concat(cloudIds)))
+      : Array.from(new Set(cloudIds.concat(customIds)));
+    if (!ordered.length) ordered.push('auto');
+
+    for (const cm of ed.customModels) {
+      modelLabels[cm.id] = cm.name + '（桌面端自定义 · 免额外登录）';
+    }
+    for (const cid of cloudIds) {
+      if (!modelLabels[cid]) {
+        modelLabels[cid] = cid === 'auto'
+          ? 'auto（WorkBuddy 云端自动路由）'
+          : (cid + '（' + (ed.isCn ? 'WorkBuddy CN 云端' : 'WorkBuddy AI 云端') + '）');
+      }
+    }
+    for (const slug of ordered) {
+      reasoning[slug] = { levels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultLevel: '', fast: false };
+    }
+    const statusHint = hasBoundCred
+      ? ' · 已绑定令牌'
+      : (ed.customModels.length ? ' · 自定义模型可用' : (ed.desktopLoggedIn ? ' · 桌面端已登录' : ''));
+    return {
+      id: ed.id,
+      label: ed.label + statusHint,
+      models: ordered,
+      active: idx === 0
+    };
+  });
+
+  const chosen = providers[0];
+  const anyCustom = editions.some(e => e.customModels.length > 0);
+  const note = (!hasBoundCred && !anyCustom)
+    ? 'WorkBuddy 桌面端登录态受系统安全存储隔离：调用云端订阅额度请在客机终端执行 codebuddy /login，或在下方绑定 CODEBUDDY_AUTH_TOKEN / API Key。'
+    : '';
+  return {
+    backend: 'workbuddy',
+    active: chosen.id,
+    defaultProvider: chosen.id,
+    defaultModel: chosen.models[0] || 'auto',
+    missing: false,
+    error: note,
+    providers,
+    modelLabels,
+    reasoning
+  };
+}
+
+function findQoderEditionsLocal() {
+  const editions = [];
+  const inspectOne = (isCn) => {
+    const id = isCn ? 'qoder-cn' : 'qoder-global';
+    const dataDir = path.join(HOME, isCn ? '.qoder-cn' : '.qoder');
+    const cliName = isCn ? 'qoderclicn' : 'qodercli';
+    const pkgName = isCn ? 'qoder-cn-agent-sdk' : 'qoder-agent-sdk';
+    const relTail = path.join('app.asar.unpacked', 'node_modules', '@qoder-ai', pkgName, 'dist', '_worker', 'qoder-worker-runtime.obf.mjs');
+
+    let standalone = '';
+    const standCands = IS_WIN
+      ? [path.join(dataDir, 'bin', cliName, cliName + '.exe'), path.join(HOME, '.local', 'bin', cliName + '.exe')]
+      : [path.join(HOME, '.local', 'bin', cliName), path.join(dataDir, 'bin', cliName, cliName), '/opt/homebrew/bin/' + cliName, '/usr/local/bin/' + cliName];
+    for (const c of standCands) {
+      if (fs.existsSync(c)) { standalone = c; break; }
+    }
+    if (!standalone) standalone = findBinOnPath(IS_WIN ? [cliName + '.exe', cliName + '.cmd'] : [cliName]);
+
+    let worker = '';
+    let runner = '';
+    if (IS_MAC) {
+      const appName = isCn ? 'Qoder CN' : 'Qoder';
+      for (const base of ['/Applications', path.join(HOME, 'Applications')]) {
+        const w = path.join(base, appName + '.app', 'Contents', 'Resources', relTail);
+        if (fs.existsSync(w)) {
+          worker = w;
+          const r = path.join(base, appName + '.app', 'Contents', 'MacOS', appName);
+          if (fs.existsSync(r)) runner = r;
+          break;
+        }
+      }
+    } else if (IS_WIN) {
+      const relDirs = isCn ? ['Programs\\Qoder CN', 'Qoder CN'] : ['Programs\\Qoder', 'Qoder'];
+      const exeName = isCn ? 'Qoder CN.exe' : 'Qoder.exe';
+      for (const root of winCandidateRootsLocal()) {
+        for (const rel of relDirs) {
+          const dir = path.join(root, rel);
+          const vDir = path.join(dir, '.qoder-versions');
+          if (fs.existsSync(vDir)) {
+            try {
+              const vers = fs.readdirSync(vDir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort(compareSemverDescLocal);
+              for (const v of vers) {
+                const w = path.join(vDir, v, 'resources', relTail);
+                if (fs.existsSync(w)) {
+                  worker = w;
+                  const r = path.join(vDir, v, exeName);
+                  runner = fs.existsSync(r) ? r : (fs.existsSync(path.join(dir, exeName)) ? path.join(dir, exeName) : '');
+                  break;
+                }
+              }
+            } catch { }
+          }
+          if (!worker) {
+            const w2 = path.join(dir, 'resources', relTail);
+            if (fs.existsSync(w2)) {
+              worker = w2;
+              if (fs.existsSync(path.join(dir, exeName))) runner = path.join(dir, exeName);
+            }
+          }
+          if (worker) break;
+        }
+        if (worker) break;
+      }
+    }
+
+    if (!standalone && !worker) return;
+    const statusJson = readJson(path.join(dataDir, '.qoder-app-status.json'));
+    const desktopLoggedIn = Boolean(statusJson && statusJson.logged_in);
+    const accountHint = statusJson ? (statusJson.email ? maskEmail(statusJson.email) : String(statusJson.name || '').trim()) : '';
+    editions.push({
+      id,
+      isCn,
+      label: isCn ? 'Qoder CN（国内版）' : 'Qoder（国际版）',
+      dataDir,
+      standalone,
+      worker,
+      runner,
+      desktopLoggedIn,
+      accountHint
+    });
+  };
+  inspectOne(true);
+  inspectOne(false);
+  return editions;
+}
+
+function parseQoderModelsOutput(text) {
+  const models = [];
+  const labels = {};
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    const t = rawLine.trim();
+    if (!t || /^(not logged|available|usage|error|version|account|─|═|-+$)/i.test(t)) continue;
+    const m = /^[*•\-\s]*([A-Za-z0-9][A-Za-z0-9._:/-]{1,80})(?:\s{2,}|\s+[—–-]\s+|\t+)(.+)$/.exec(t);
+    if (m && m[1]) {
+      models.push(m[1]);
+      labels[m[1]] = m[2].trim();
+    } else if (/^[A-Za-z0-9][A-Za-z0-9._:/-]{1,60}$/.test(t) && !/^\d+$/.test(t)) {
+      models.push(t);
+    }
+  }
+  return { models: Array.from(new Set(models)), labels };
+}
+
+function probeQoder() {
+  const editions = findQoderEditionsLocal();
+  if (!editions.length) {
+    return {
+      backend: 'qoder',
+      active: '',
+      defaultProvider: '',
+      defaultModel: '',
+      missing: true,
+      error: '客机未检测到 Qoder（国内版 CN 或国际版）。',
+      providers: [],
+      modelLabels: {},
+      reasoning: {}
+    };
+  }
+  const creds = readAgentCreds().qoder;
+  const proxyEnv = detectSystemProxyEnv();
+  const modelLabels = {};
+  const reasoning = {};
+  const authWarnings = [];
+
+  const providers = editions.map((ed, idx) => {
+    const pat = ed.isCn ? creds.patCn : creds.patGlobal;
+    const env = Object.assign({}, process.env, proxyEnv, {
+      PATH: (IS_WIN ? '' : '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:') + String(process.env.PATH || ''),
+      QODER_CONFIG_DIR: ed.dataDir,
+      NO_COLOR: '1'
+    });
+    if (pat) {
+      env.QODER_PERSONAL_ACCESS_TOKEN = pat;
+      env.QODER_PAT = pat;
+    }
+    let cmd = '';
+    let args = [];
+    if (ed.standalone) {
+      cmd = ed.standalone;
+      args = ['--list-models'];
+    } else {
+      cmd = ed.runner || process.execPath;
+      if (ed.runner) env.ELECTRON_RUN_AS_NODE = '1';
+      args = [ed.worker, '--list-models'];
+    }
+    let out = '';
+    try {
+      const r = spawnSync(cmd, args, { env, encoding: 'utf8', timeout: 15000, windowsHide: true });
+      out = String((r && r.stdout) || '') + '\n' + String((r && r.stderr) || '');
+    } catch { }
+    const notLoggedIn = /not logged in|please run.*login|authentication required/i.test(out);
+    const parsed = notLoggedIn ? { models: [], labels: {} } : parseQoderModelsOutput(out);
+    const models = parsed.models.length ? parsed.models : ['auto'];
+    Object.assign(modelLabels, parsed.labels);
+    if (!modelLabels.auto) modelLabels.auto = 'auto（Qoder 自动选择模型）';
+    for (const slug of models) {
+      reasoning[slug] = { levels: ['low', 'medium', 'high'], defaultLevel: '', fast: false };
+    }
+    const hintParts = [];
+    if (pat) hintParts.push('已绑定 PAT');
+    else if (!notLoggedIn && parsed.models.length) hintParts.push('CLI 已登录');
+    else if (ed.desktopLoggedIn) hintParts.push('桌面端已登录' + (ed.accountHint ? ' · ' + ed.accountHint : '') + ' · 需 CLI 登录或 PAT');
+    else hintParts.push('未登录 CLI');
+    if (notLoggedIn) {
+      authWarnings.push((ed.isCn ? 'Qoder CN' : 'Qoder 国际版') + ' 需先在客机终端完成一次 CLI 登录或在下方绑定 PAT');
+    }
+    return {
+      id: ed.id,
+      label: ed.label + (hintParts.length ? '（' + hintParts.join(' / ') + '）' : ''),
+      models,
+      active: idx === 0,
+      cliAuthenticated: !notLoggedIn
+    };
+  });
+
+  const authed = providers.find(p => p.cliAuthenticated);
+  const chosen = authed || providers[0];
+  return {
+    backend: 'qoder',
+    active: chosen.id,
+    defaultProvider: chosen.id,
+    defaultModel: chosen.models[0] || 'auto',
+    missing: false,
+    error: (!authed && authWarnings.length)
+      ? ('Qoder 桌面端凭据受系统安全存储隔离：' + authWarnings.join('；') + '（同账号同额度，支持 SSH 链接授权或 PAT 绑定）。')
+      : '',
+    providers,
+    modelLabels,
+    reasoning
+  };
+}
+
 (async () => {
   const mode = String(process.argv[2] || '').toLowerCase();
   const payload = mode === 'dsh' ? probeDsh()
-    : (mode === 'agy' ? probeAgy() : await probeCodex());
+    : (mode === 'agy' ? probeAgy()
+      : (mode === 'workbuddy' ? probeWorkBuddy()
+        : (mode === 'qoder' ? probeQoder() : await probeCodex())));
   console.log('SMAC_MODELS ' + JSON.stringify(payload));
 })().catch(err => {
   console.log('SMAC_MODELS ' + JSON.stringify({ error: String((err && err.message) || err), providers: [] }));

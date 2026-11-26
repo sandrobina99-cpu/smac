@@ -65,6 +65,24 @@ const CLI_CATALOG = [
     methodWin: '随 DeepSeek Harness 安装 / npm',
     methodPosix: '随 DeepSeek Harness 安装 / npm',
     description: 'DeepSeek Harness 命令行引擎（自动复用桌面端订阅）'
+  },
+  {
+    id: 'workbuddy',
+    kind: 'cli',
+    name: 'WorkBuddy · CodeBuddy CLI',
+    vendor: 'Tencent',
+    methodWin: 'npm install -g @tencent-ai/codebuddy-code',
+    methodPosix: 'npm install -g @tencent-ai/codebuddy-code',
+    description: '腾讯 WorkBuddy / CodeBuddy 官方命令行 Agent（已装桌面端则自动复用内置引擎）'
+  },
+  {
+    id: 'qoder',
+    kind: 'cli',
+    name: 'Qoder CLI（国内版 CN / 国际版）',
+    vendor: 'Alibaba / Qoder',
+    methodWin: 'qoder.com.cn/install 或 qoder.com/install',
+    methodPosix: 'curl -fsSL https://qoder.com.cn/install | bash',
+    description: 'Qoder 官方 CLI（已装 Qoder 桌面端则自动复用内置无头引擎）'
   }
 ];
 
@@ -281,6 +299,25 @@ function buildWindowsInstallScript(kind, id) {
         "Write-Output 'SMAC_INSTALL_ERR DeepSeek Harness CLI 随 DeepSeek Harness 桌面端内置，请先在客机安装 DeepSeek Harness 桌面端'; exit 1"
       ]).join('\n');
     }
+    if (id === 'workbuddy') {
+      return commonNpmHelper.concat([
+        "$npm = Ensure-Node; if (-not $npm) { Write-Output 'SMAC_INSTALL_ERR 客机未安装 Node.js / npm'; exit 1 }",
+        "$out = (& $npm install -g @tencent-ai/codebuddy-code --no-audit --no-fund 2>&1 | Out-String)",
+        "if ($LASTEXITCODE -eq 0) { Write-Output 'SMAC_INSTALL_OK npm:@tencent-ai/codebuddy-code'; exit 0 }",
+        "Write-Output ('SMAC_INSTALL_ERR ' + (($out -split \"`r?`n\" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' | ')); exit 1"
+      ]).join('\n');
+    }
+    if (id === 'qoder') {
+      return commonNpmHelper.concat([
+        "try {",
+        "  $tmp = Join-Path $env:TEMP 'smac-install-qoder.ps1'",
+        "  Invoke-WebRequest -UseBasicParsing 'https://qoder.com.cn/install.ps1' -OutFile $tmp -TimeoutSec 60",
+        "  $out = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tmp 2>&1 | Out-String)",
+        "  if ($LASTEXITCODE -eq 0) { Write-Output 'SMAC_INSTALL_OK qoder:official'; exit 0 }",
+        "  Write-Output ('SMAC_INSTALL_ERR ' + (($out -split \"`r?`n\" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' | ')); exit 1",
+        "} catch { Write-Output ('SMAC_INSTALL_ERR ' + $_.Exception.Message); exit 1 }"
+      ]).join('\n');
+    }
   }
 
   // Desktop apps on Windows (winget official default installation directory)
@@ -362,6 +399,20 @@ function buildPosixInstallScript(kind, id) {
       return header.concat([
         'if ensure_npm && out=$(npm install -g @deepseek/harness --no-audit --no-fund 2>&1); then echo "SMAC_INSTALL_OK npm:@deepseek/harness"; exit 0; fi',
         'echo "SMAC_INSTALL_ERR DeepSeek Harness CLI 随 DeepSeek Harness 桌面端内置，请先在客机安装 DeepSeek Harness"; exit 1'
+      ]).join('\n');
+    }
+    if (id === 'workbuddy') {
+      return header.concat([
+        'ensure_npm || { echo "SMAC_INSTALL_ERR 客机未安装 Node.js / npm"; exit 1; }',
+        'out=$(npm install -g @tencent-ai/codebuddy-code --no-audit --no-fund 2>&1) && { echo "SMAC_INSTALL_OK npm:@tencent-ai/codebuddy-code"; exit 0; }',
+        'echo "SMAC_INSTALL_ERR $(echo "$out" | tail -n 3 | tr "\\n" " ")"; exit 1'
+      ]).join('\n');
+    }
+    if (id === 'qoder') {
+      return header.concat([
+        'out=$(curl -fsSL https://qoder.com.cn/install | bash 2>&1) && { echo "SMAC_INSTALL_OK qoder:cn"; exit 0; }',
+        'out=$(curl -fsSL https://qoder.com/install | bash 2>&1) && { echo "SMAC_INSTALL_OK qoder:global"; exit 0; }',
+        'echo "SMAC_INSTALL_ERR $(echo "$out" | tail -n 3 | tr "\\n" " ")"; exit 1'
       ]).join('\n');
     }
   }

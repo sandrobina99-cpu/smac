@@ -44,7 +44,7 @@ function whichSync(cmd) {
     }
     return '';
   }
-  const extraPath = '/opt/homebrew/bin:/usr/local/bin:$HOME/.gemini/bin:$HOME/.local/bin:$HOME/.hermes/node/bin:$PATH';
+  const extraPath = '/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/sbin:$HOME/.gemini/bin:$HOME/.local/bin:$HOME/.hermes/node/bin:$HOME/.qoder/bin/qodercli:$HOME/.qoder-cn/bin/qoderclicn:$PATH';
   const res = spawnSync('sh', ['-c', 'export PATH="' + extraPath + '"; command -v ' + cmd + ' 2>/dev/null'], { encoding: 'utf8', timeout: 5000 });
   if (res.status === 0 && res.stdout) {
     const first = res.stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean);
@@ -97,6 +97,384 @@ function detectAntigravityAuth(home) {
     cliHasAuth,
     authenticated: desktopLoggedIn || cliHasAuth,
     accountHint
+  };
+}
+
+function compareSemverDesc(a, b) {
+  const pa = String(a || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pb[i] || 0) - (pa[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return String(b || '').localeCompare(String(a || ''));
+}
+
+function findWorkBuddyCliInAppDir(appRoot) {
+  if (!appRoot) return '';
+  const candidates = IS_MAC
+    ? [path.join(appRoot, 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'dist', 'codebuddy-lite-wb.mjs')]
+    : [path.join(appRoot, 'resources', 'app.asar.unpacked', 'cli', 'dist', 'codebuddy-lite-wb.mjs')];
+  return candidates.find(isFile) || '';
+}
+
+function readWorkBuddyProductEndpoint(appRoot) {
+  if (!appRoot) return '';
+  const pj = IS_MAC
+    ? path.join(appRoot, 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'product.json')
+    : path.join(appRoot, 'resources', 'app.asar.unpacked', 'cli', 'product.json');
+  const data = readJsonSafe(pj);
+  return data && typeof data.endpoint === 'string' ? data.endpoint.trim() : '';
+}
+
+function inspectWorkBuddyDataDir(dataDir) {
+  const result = { exists: isDir(dataDir), loggedIn: false, endpoint: '', version: '', customModels: [] };
+  if (!result.exists) return result;
+  const ep = readJsonSafe(path.join(dataDir, 'cache', 'update-endpoint.json'));
+  if (ep && typeof ep.endpoint === 'string') result.endpoint = ep.endpoint.trim();
+  const ll = readJsonSafe(path.join(dataDir, 'last-launch.json'));
+  if (ll && typeof ll.version === 'string') result.version = ll.version.trim();
+  const storageDir = path.join(dataDir, 'storage');
+  if (isDir(storageDir)) {
+    try {
+      const entries = fs.readdirSync(storageDir);
+      if (entries.some(name => /^user-/i.test(name))) result.loggedIn = true;
+    } catch { }
+  }
+  const models = readJsonSafe(path.join(dataDir, 'models.json'));
+  if (Array.isArray(models)) {
+    result.customModels = models
+      .filter(m => m && m.id)
+      .map(m => ({ id: 'custom-local:' + String(m.id), name: String(m.name || m.id) }));
+  }
+  return result;
+}
+
+function detectWorkBuddyMeta(home, winMeta, roots) {
+  const winRoots = Array.isArray(roots) ? roots : (IS_WIN ? candidateRootsWindows() : []);
+  const findAppRoot = (macNames, winRelDirs, winExeNames, shortcutRe, excludeRe) => {
+    if (IS_MAC) {
+      for (const appName of macNames) {
+        for (const base of ['/Applications', path.join(home, 'Applications')]) {
+          const bundle = path.join(base, appName + '.app');
+          if (isDir(path.join(bundle, 'Contents'))) {
+            const macosDir = path.join(bundle, 'Contents', 'MacOS');
+            let exe = path.join(macosDir, 'Electron');
+            if (!isFile(exe)) exe = path.join(macosDir, appName);
+            if (!isFile(exe) && isDir(macosDir)) {
+              try {
+                exe = fs.readdirSync(macosDir).map(n => path.join(macosDir, n)).find(isFile) || '';
+              } catch { exe = ''; }
+            }
+            if (exe) return { appRoot: bundle, exe };
+          }
+        }
+      }
+      return { appRoot: '', exe: '' };
+    }
+    if (IS_WIN) {
+      for (const root of winRoots) {
+        for (const relDir of winRelDirs) {
+          const dir = path.join(root, relDir);
+          if (!isDir(dir)) continue;
+          for (const exeName of winExeNames) {
+            const full = path.join(dir, exeName);
+            if (isFile(full)) return { appRoot: dir, exe: full };
+          }
+          // Fallback: check bundled CLI even if exe has custom name
+          if (findWorkBuddyCliInAppDir(dir)) {
+            return { appRoot: dir, exe: findWorkBuddyCliInAppDir(dir) };
+          }
+        }
+      }
+      if (winMeta && Array.isArray(winMeta.shortcuts)) {
+        for (const s of winMeta.shortcuts) {
+          const label = String(s.name || '') + ' ' + String(s.target || '');
+          if (shortcutRe.test(label) && (!excludeRe || !excludeRe.test(label)) && s.target && isFile(s.target)) {
+            return { appRoot: path.dirname(s.target), exe: s.target };
+          }
+        }
+      }
+    }
+    return { appRoot: '', exe: '' };
+  };
+
+  const cnApp = findAppRoot(
+    ['WorkBuddy', 'WorkBuddy CN'],
+    ['Programs\\WorkBuddy', 'WorkBuddy'],
+    ['WorkBuddy.exe'],
+    /workbuddy/i,
+    /workbuddy[\s_-]*ai/i
+  );
+  const globalApp = findAppRoot(
+    ['WorkBuddy AI', 'WorkBuddyAI'],
+    ['Programs\\WorkBuddyAI', 'Programs\\WorkBuddy AI', 'WorkBuddyAI', 'WorkBuddy AI'],
+    ['WorkBuddy AI.exe', 'WorkBuddyAI.exe', 'WorkBuddy.exe'],
+    /workbuddy[\s_-]*ai/i,
+    null
+  );
+
+  const cnData = inspectWorkBuddyDataDir(path.join(home, '.workbuddy'));
+  const globalData = inspectWorkBuddyDataDir(path.join(home, '.workbuddy-ai'));
+
+  // Refine edition from product.json endpoint if present
+  const cnEndpoint = readWorkBuddyProductEndpoint(cnApp.appRoot) || cnData.endpoint || 'https://www.workbuddy.cn';
+  const globalEndpoint = readWorkBuddyProductEndpoint(globalApp.appRoot) || globalData.endpoint || 'https://www.workbuddy.ai';
+
+  const cnCli = findWorkBuddyCliInAppDir(cnApp.appRoot);
+  const globalCli = findWorkBuddyCliInAppDir(globalApp.appRoot);
+  const standaloneCli = whichSync(IS_WIN ? 'codebuddy.cmd' : 'codebuddy')
+    || whichSync(IS_WIN ? 'codebuddy.exe' : 'cbc')
+    || '';
+
+  const cnInstalled = Boolean(cnApp.exe);
+  const globalInstalled = Boolean(globalApp.exe);
+
+  let edition = '';
+  let editionLabel = '';
+  if (cnInstalled && globalInstalled) {
+    edition = 'both';
+    editionLabel = 'CN + 国际版';
+  } else if (cnInstalled) {
+    const isAiEndpoint = /workbuddy\.ai/i.test(cnEndpoint) && !/workbuddy\.cn/i.test(cnEndpoint);
+    edition = isAiEndpoint ? 'global' : 'cn';
+    editionLabel = isAiEndpoint ? '国际版 (Global)' : '国内版 (CN)';
+  } else if (globalInstalled) {
+    edition = 'global';
+    editionLabel = '国际版 (Global)';
+  } else if (standaloneCli) {
+    edition = cnData.loggedIn ? 'cn' : (globalData.loggedIn ? 'global' : '');
+    editionLabel = edition === 'cn' ? '国内版 (CN)' : (edition === 'global' ? '国际版 (Global)' : '');
+  }
+
+  return {
+    cn: {
+      installed: cnInstalled,
+      exe: cnApp.exe,
+      appRoot: cnApp.appRoot,
+      cli: cnCli,
+      endpoint: cnEndpoint,
+      desktopLoggedIn: cnData.loggedIn,
+      version: cnData.version,
+      customModels: cnData.customModels
+    },
+    global: {
+      installed: globalInstalled,
+      exe: globalApp.exe,
+      appRoot: globalApp.appRoot,
+      cli: globalCli,
+      endpoint: globalEndpoint,
+      desktopLoggedIn: globalData.loggedIn,
+      version: globalData.version,
+      customModels: globalData.customModels
+    },
+    standaloneCli,
+    anyDesktop: cnInstalled || globalInstalled,
+    anyCli: Boolean(cnCli || globalCli || standaloneCli),
+    cliPath: cnCli || globalCli || standaloneCli,
+    desktopPath: cnApp.exe || globalApp.exe,
+    edition,
+    editionLabel,
+    desktopLoggedIn: (cnInstalled && cnData.loggedIn) || (globalInstalled && globalData.loggedIn),
+    customModelsCount: cnData.customModels.length + globalData.customModels.length
+  };
+}
+
+function findQoderBundledWorker(appRoot, isCn) {
+  if (!appRoot) return '';
+  const pkgName = isCn ? 'qoder-cn-agent-sdk' : 'qoder-agent-sdk';
+  const relTail = path.join('app.asar.unpacked', 'node_modules', '@qoder-ai', pkgName, 'dist', '_worker', 'qoder-worker-runtime.obf.mjs');
+  if (IS_MAC) {
+    const p = path.join(appRoot, 'Contents', 'Resources', relTail);
+    return isFile(p) ? p : '';
+  }
+  if (IS_WIN) {
+    // Check .qoder-versions/<latest>/resources/... first (Qoder Windows launcher layout)
+    const versionsDir = path.join(appRoot, '.qoder-versions');
+    if (isDir(versionsDir)) {
+      try {
+        const vers = fs.readdirSync(versionsDir, { withFileTypes: true })
+          .filter(e => e.isDirectory())
+          .map(e => e.name)
+          .sort(compareSemverDesc);
+        for (const v of vers) {
+          const p = path.join(versionsDir, v, 'resources', relTail);
+          if (isFile(p)) return p;
+        }
+      } catch { }
+    }
+    const direct = path.join(appRoot, 'resources', relTail);
+    if (isFile(direct)) return direct;
+  }
+  return '';
+}
+
+function inspectQoderEdition(home, isCn, winMeta, roots) {
+  const winRoots = Array.isArray(roots) ? roots : (IS_WIN ? candidateRootsWindows() : []);
+  const dataDir = path.join(home, isCn ? '.qoder-cn' : '.qoder');
+  const statusJson = readJsonSafe(path.join(dataDir, '.qoder-app-status.json'));
+  const desktopLoggedIn = Boolean(statusJson && statusJson.logged_in);
+  const rawName = statusJson && statusJson.name ? String(statusJson.name).trim() : '';
+  const rawEmail = statusJson && statusJson.email ? maskAccountEmail(statusJson.email) : '';
+  const accountHint = rawEmail || rawName;
+  const statusVersion = statusJson && statusJson.version ? String(statusJson.version).trim() : '';
+
+  // Check if CLI has standalone OAuth credentials (distinct from desktop-only job_token)
+  let cliAuthenticated = false;
+  const stateJson = readJsonSafe(path.join(dataDir, 'state.json'));
+  if (stateJson && stateJson.lastLoginMethod && stateJson.lastLoginMethod !== 'job_token') {
+    cliAuthenticated = true;
+  }
+  const authDir = path.join(dataDir, '.auth');
+  if (!cliAuthenticated && isDir(authDir)) {
+    try {
+      const files = fs.readdirSync(authDir);
+      if (files.some(f => !/^(\.credential-transaction|dynamic-.*|machine_id)$/i.test(f))) {
+        cliAuthenticated = true;
+      }
+    } catch { }
+  }
+
+  let appRoot = '';
+  let desktopExe = '';
+  let ideExe = '';
+  let runnerExe = '';
+
+  if (IS_MAC) {
+    const appNames = isCn ? ['Qoder CN'] : ['Qoder'];
+    const ideNames = isCn ? ['Qoder CN IDE'] : ['Qoder IDE'];
+    for (const base of ['/Applications', path.join(home, 'Applications')]) {
+      for (const nm of appNames) {
+        const bundle = path.join(base, nm + '.app');
+        const bin = path.join(bundle, 'Contents', 'MacOS', nm);
+        if (!desktopExe && isFile(bin)) {
+          appRoot = bundle;
+          desktopExe = bin;
+          runnerExe = bin;
+        }
+      }
+      for (const nm of ideNames) {
+        const bundle = path.join(base, nm + '.app');
+        const macosDir = path.join(bundle, 'Contents', 'MacOS');
+        if (!ideExe && isDir(macosDir)) {
+          try {
+            const first = fs.readdirSync(macosDir).map(n => path.join(macosDir, n)).find(isFile);
+            if (first) ideExe = first;
+          } catch { }
+        }
+      }
+    }
+  } else if (IS_WIN) {
+    const dirNames = isCn ? ['Programs\\Qoder CN', 'Qoder CN'] : ['Programs\\Qoder', 'Qoder'];
+    const exeName = isCn ? 'Qoder CN.exe' : 'Qoder.exe';
+    for (const root of winRoots) {
+      for (const rel of dirNames) {
+        const dir = path.join(root, rel);
+        const exe = path.join(dir, exeName);
+        if (isFile(exe)) {
+          appRoot = dir;
+          desktopExe = exe;
+          runnerExe = exe;
+          break;
+        }
+      }
+      if (desktopExe) break;
+    }
+    if (!desktopExe && winMeta && Array.isArray(winMeta.shortcuts)) {
+      const matchRe = isCn ? /qoder\s*cn/i : /\bqoder\b/i;
+      const exclRe = isCn ? null : /qoder\s*cn/i;
+      for (const s of winMeta.shortcuts) {
+        const label = String(s.name || '') + ' ' + String(s.target || '') + ' ' + String(s.dir || '');
+        if (matchRe.test(label) && (!exclRe || !exclRe.test(label))) {
+          if (s.dir && isDir(s.dir) && isFile(path.join(s.dir, exeName))) {
+            appRoot = s.dir;
+            desktopExe = path.join(s.dir, exeName);
+            runnerExe = desktopExe;
+            break;
+          }
+          if (s.target && isFile(s.target)) {
+            desktopExe = s.target;
+            if (s.dir && isDir(s.dir)) appRoot = s.dir;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Standalone CLI (qoderclicn / qodercli)
+  const cliCmd = isCn ? 'qoderclicn' : 'qodercli';
+  const standaloneCandidates = IS_WIN
+    ? [
+        path.join(dataDir, 'bin', cliCmd, cliCmd + '.exe'),
+        path.join(home, '.local', 'bin', cliCmd + '.exe')
+      ]
+    : [
+        path.join(home, '.local', 'bin', cliCmd),
+        path.join(dataDir, 'bin', cliCmd, cliCmd),
+        '/opt/homebrew/bin/' + cliCmd,
+        '/usr/local/bin/' + cliCmd
+      ];
+  const standaloneCli = standaloneCandidates.find(isFile)
+    || whichSync(IS_WIN ? (cliCmd + '.exe') : cliCmd)
+    || (IS_WIN ? whichSync(cliCmd + '.cmd') : '');
+
+  const bundledWorker = findQoderBundledWorker(appRoot, isCn);
+  if (IS_WIN && bundledWorker) {
+    const exeName = isCn ? 'Qoder CN.exe' : 'Qoder.exe';
+    const verRoot = path.resolve(bundledWorker, '..', '..', '..', '..', '..', '..', '..', '..');
+    const verExe = path.join(verRoot, exeName);
+    if (isFile(verExe)) runnerExe = verExe;
+  }
+
+  return {
+    id: isCn ? 'qoder-cn' : 'qoder-global',
+    edition: isCn ? 'cn' : 'global',
+    editionLabel: isCn ? '国内版 (CN)' : '国际版 (Global)',
+    desktopInstalled: Boolean(desktopExe || ideExe),
+    desktopPath: desktopExe || ideExe,
+    ideInstalled: Boolean(ideExe),
+    idePath: ideExe,
+    appRoot,
+    runnerExe,
+    standaloneCli,
+    bundledWorker,
+    cliPath: standaloneCli || bundledWorker,
+    cliInstalled: Boolean(standaloneCli || bundledWorker),
+    cliKind: standaloneCli ? 'standalone' : (bundledWorker ? 'bundled' : ''),
+    desktopLoggedIn,
+    cliAuthenticated,
+    accountHint,
+    version: statusVersion,
+    dataDir
+  };
+}
+
+function detectQoderMeta(home, winMeta, roots) {
+  const cn = inspectQoderEdition(home, true, winMeta, roots);
+  const global = inspectQoderEdition(home, false, winMeta, roots);
+  const cnAny = cn.desktopInstalled || cn.cliInstalled;
+  const globalAny = global.desktopInstalled || global.cliInstalled;
+  let edition = '';
+  let editionLabel = '';
+  if (cnAny && globalAny) {
+    edition = 'both';
+    editionLabel = 'CN + 国际版';
+  } else if (cnAny) {
+    edition = 'cn';
+    editionLabel = '国内版 (CN)';
+  } else if (globalAny) {
+    edition = 'global';
+    editionLabel = '国际版 (Global)';
+  }
+  return {
+    cn,
+    global,
+    edition,
+    editionLabel,
+    anyCli: cn.cliInstalled || global.cliInstalled,
+    anyDesktop: cn.desktopInstalled || global.desktopInstalled,
+    cliPath: cn.cliPath || global.cliPath
   };
 }
 
@@ -219,7 +597,7 @@ function detectNetworkAndMachine() {
   };
 }
 
-function detectCliEnvironments() {
+function detectCliEnvironments(winMeta, roots) {
   const home = os.homedir();
   const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
   const agentTools = path.join(home, '.smac-agent', 'tools');
@@ -319,6 +697,41 @@ function detectCliEnvironments() {
     }
   } catch { }
 
+  // 7. WorkBuddy / CodeBuddy CLI（自动区分国内版 CN / 国际版 AI）
+  const wbMeta = detectWorkBuddyMeta(home, winMeta, roots);
+  const wbBadge = wbMeta.anyCli
+    ? [
+        wbMeta.editionLabel || '已安装',
+        wbMeta.customModelsCount > 0 ? '自定义模型就绪' : (wbMeta.desktopLoggedIn ? '桌面端已登录' : '内置引擎就绪')
+      ].filter(Boolean).join(' · ')
+    : (wbMeta.anyDesktop ? ((wbMeta.editionLabel || '已安装') + ' · 未见内置CLI') : '未安装');
+  const wbDesc = wbMeta.anyCli
+    ? ('已检测到 WorkBuddy ' + (wbMeta.editionLabel || '')
+      + ' 内置无头 CLI（codebuddy-lite-wb）；桌面端自定义模型可直接无头调用，云端订阅额度需在客机终端 /login 或在下方绑定 CODEBUDDY_AUTH_TOKEN。')
+    : '客机未检测到 WorkBuddy（CN / 国际版）或 CodeBuddy CLI';
+
+  // 8. Qoder CLI（自动区分 Qoder CN 国内版 / Qoder 国际版）
+  const qoderMeta = detectQoderMeta(home, winMeta, roots);
+  const qoderEditionParts = [];
+  if (qoderMeta.cn.cliInstalled) {
+    qoderEditionParts.push('CN 国内版' + (qoderMeta.cn.accountHint ? '(' + qoderMeta.cn.accountHint + ')' : ''));
+  }
+  if (qoderMeta.global.cliInstalled) {
+    qoderEditionParts.push('国际版' + (qoderMeta.global.accountHint ? '(' + qoderMeta.global.accountHint + ')' : ''));
+  }
+  const qoderAnyCliAuth = qoderMeta.cn.cliAuthenticated || qoderMeta.global.cliAuthenticated;
+  const qoderAnyDesktopAuth = qoderMeta.cn.desktopLoggedIn || qoderMeta.global.desktopLoggedIn;
+  const qoderBadge = qoderMeta.anyCli
+    ? [
+        qoderMeta.editionLabel || '已安装',
+        qoderAnyCliAuth ? 'CLI 已登录' : (qoderAnyDesktopAuth ? '桌面端已登录 · 内置引擎' : '内置引擎就绪')
+      ].filter(Boolean).join(' · ')
+    : '未安装';
+  const qoderDesc = qoderMeta.anyCli
+    ? ('已识别 ' + qoderEditionParts.join(' + ')
+      + '，支持无头调用内置 qodercli/qoderclicn 引擎；桌面端受系统安全存储隔离，远程使用账号额度需执行一次 CLI login 或绑定 PAT。')
+    : '客机未检测到 Qoder（CN 国内版 / 国际版）';
+
   return [
     {
       id: 'dsh',
@@ -400,6 +813,72 @@ function detectCliEnvironments() {
           : '首次选择自动安装 Antigravity CLI，支持复用桌面端订阅或密钥绑定')
     },
     {
+      id: 'workbuddy',
+      name: 'WorkBuddy · CodeBuddy',
+      vendor: 'Tencent',
+      edition: wbMeta.edition,
+      editionLabel: wbMeta.editionLabel,
+      editions: {
+        cn: {
+          installed: wbMeta.cn.installed,
+          cliInstalled: Boolean(wbMeta.cn.cli),
+          desktopLoggedIn: wbMeta.cn.desktopLoggedIn,
+          version: wbMeta.cn.version,
+          customModelsCount: wbMeta.cn.customModels.length
+        },
+        global: {
+          installed: wbMeta.global.installed,
+          cliInstalled: Boolean(wbMeta.global.cli),
+          desktopLoggedIn: wbMeta.global.desktopLoggedIn,
+          version: wbMeta.global.version,
+          customModelsCount: wbMeta.global.customModels.length
+        }
+      },
+      installed: wbMeta.anyCli,
+      autoInstall: false,
+      ready: wbMeta.anyCli,
+      authenticated: wbMeta.desktopLoggedIn || wbMeta.customModelsCount > 0,
+      desktopLoggedIn: wbMeta.desktopLoggedIn,
+      path: wbMeta.cliPath || '',
+      badge: wbBadge,
+      description: wbDesc
+    },
+    {
+      id: 'qoder',
+      name: 'Qoder CLI',
+      vendor: 'Alibaba / Qoder',
+      edition: qoderMeta.edition,
+      editionLabel: qoderMeta.editionLabel,
+      editions: {
+        cn: {
+          installed: qoderMeta.cn.desktopInstalled,
+          cliInstalled: qoderMeta.cn.cliInstalled,
+          cliKind: qoderMeta.cn.cliKind,
+          desktopLoggedIn: qoderMeta.cn.desktopLoggedIn,
+          cliAuthenticated: qoderMeta.cn.cliAuthenticated,
+          accountHint: qoderMeta.cn.accountHint,
+          version: qoderMeta.cn.version
+        },
+        global: {
+          installed: qoderMeta.global.desktopInstalled,
+          cliInstalled: qoderMeta.global.cliInstalled,
+          cliKind: qoderMeta.global.cliKind,
+          desktopLoggedIn: qoderMeta.global.desktopLoggedIn,
+          cliAuthenticated: qoderMeta.global.cliAuthenticated,
+          accountHint: qoderMeta.global.accountHint,
+          version: qoderMeta.global.version
+        }
+      },
+      installed: qoderMeta.anyCli,
+      autoInstall: false,
+      ready: qoderMeta.anyCli,
+      authenticated: qoderAnyCliAuth || qoderAnyDesktopAuth,
+      desktopLoggedIn: qoderAnyDesktopAuth,
+      path: qoderMeta.cliPath || '',
+      badge: qoderBadge,
+      description: qoderDesc
+    },
+    {
       id: 'opencode',
       name: 'OpenCode CLI',
       vendor: 'OpenCode',
@@ -474,10 +953,10 @@ function candidateRootsWindows() {
   return roots;
 }
 
-function detectDesktopEnvironments() {
+function detectDesktopEnvironments(winMetaInput, rootsInput) {
   const home = os.homedir();
-  const winMeta = collectWindowsShortcutsAndAppx();
-  const roots = IS_WIN ? candidateRootsWindows() : [];
+  const winMeta = winMetaInput || collectWindowsShortcutsAndAppx();
+  const roots = rootsInput || (IS_WIN ? candidateRootsWindows() : []);
 
   function findWinExe(relPaths, shortcutRegex, appxFilter) {
     // 1. Direct relative paths under candidate roots
@@ -659,6 +1138,8 @@ function detectDesktopEnvironments() {
   ];
 
   const agyAuth = detectAntigravityAuth(home);
+  const wbMeta = detectWorkBuddyMeta(home, winMeta, roots);
+  const qoderMeta = detectQoderMeta(home, winMeta, roots);
   const dshCredFile = path.join(home, '.dsh', '.credentials.yaml');
   let dshHasAuth = false;
   try {
@@ -667,7 +1148,7 @@ function detectDesktopEnvironments() {
     }
   } catch { }
 
-  return catalog.map(item => {
+  const baseItems = catalog.map(item => {
     let exePath = '';
     if (IS_WIN) {
       exePath = findWinExe(item.winRel || [], item.shortcutRe, item.appxRe);
@@ -702,12 +1183,102 @@ function detectDesktopEnvironments() {
       description: item.description
     };
   });
+
+  // 追加自动区分国内版 (CN) / 国际版 (Global) 的 WorkBuddy 与 Qoder 桌面端卡片
+  const wbCardName = wbMeta.edition === 'cn'
+    ? 'WorkBuddy（CN）'
+    : (wbMeta.edition === 'global' ? 'WorkBuddy AI（国际版）' : 'WorkBuddy');
+  const wbCardBadge = wbMeta.anyDesktop
+    ? [
+        wbMeta.editionLabel || '已安装',
+        wbMeta.desktopLoggedIn ? '桌面端已登录' : '',
+        wbMeta.customModelsCount > 0 ? (wbMeta.customModelsCount + ' 个自定义模型') : ''
+      ].filter(Boolean).join(' · ')
+    : '未检测到';
+  const wbCardDesc = wbMeta.anyDesktop
+    ? ('腾讯 WorkBuddy ' + (wbMeta.editionLabel || '')
+      + (wbMeta.cn.version || wbMeta.global.version ? ' v' + (wbMeta.cn.version || wbMeta.global.version) : '')
+      + ' · 内置无头 CLI（点击切换到 WorkBuddy Agent 引擎）')
+    : '腾讯 WorkBuddy 桌面端（支持自动区分国内版 CN / 国际版 WorkBuddy AI）';
+
+  const qcn = qoderMeta.cn;
+  const qgl = qoderMeta.global;
+  const extraItems = [
+    {
+      id: 'workbuddy-desktop',
+      name: wbCardName,
+      vendor: 'Tencent',
+      kind: 'electron',
+      edition: wbMeta.edition,
+      editionLabel: wbMeta.editionLabel,
+      supportsCdp: true,
+      supportsFolderArg: false,
+      installed: wbMeta.anyDesktop,
+      authenticated: wbMeta.desktopLoggedIn || wbMeta.customModelsCount > 0,
+      accountHint: '',
+      path: wbMeta.desktopPath || '',
+      badge: wbCardBadge,
+      description: wbCardDesc
+    },
+    {
+      id: 'qoder-cn-desktop',
+      name: 'Qoder CN（国内版）',
+      vendor: 'Alibaba / Qoder',
+      kind: 'electron',
+      edition: 'cn',
+      editionLabel: '国内版 (CN)',
+      preferredProvider: 'qoder-cn',
+      supportsCdp: true,
+      supportsFolderArg: true,
+      installed: qcn.desktopInstalled,
+      authenticated: qcn.desktopLoggedIn || qcn.cliAuthenticated,
+      accountHint: qcn.accountHint || '',
+      path: qcn.desktopPath || '',
+      badge: qcn.desktopInstalled
+        ? ('国内版 CN'
+          + (qcn.cliAuthenticated ? ' · CLI 已登录' : (qcn.desktopLoggedIn ? (' · 已登录' + (qcn.accountHint ? '(' + qcn.accountHint + ')' : '')) : ' · 已安装'))
+          + (qcn.ideInstalled ? ' · 含 IDE' : ''))
+        : '未检测到',
+      description: qcn.desktopInstalled
+        ? ('Qoder 国内版' + (qcn.version ? ' v' + qcn.version : '') + (qcn.ideInstalled ? '（含 Qoder CN IDE）' : '')
+          + ' · 内置 qoderclicn 引擎，点击切换至 Qoder CN')
+        : 'Qoder 国内版桌面端 / IDE（qoder.com.cn）'
+    },
+    {
+      id: 'qoder-desktop',
+      name: 'Qoder（国际版）',
+      vendor: 'Alibaba / Qoder',
+      kind: 'electron',
+      edition: 'global',
+      editionLabel: '国际版 (Global)',
+      preferredProvider: 'qoder-global',
+      supportsCdp: true,
+      supportsFolderArg: true,
+      installed: qgl.desktopInstalled,
+      authenticated: qgl.desktopLoggedIn || qgl.cliAuthenticated,
+      accountHint: qgl.accountHint || '',
+      path: qgl.desktopPath || '',
+      badge: qgl.desktopInstalled
+        ? ('国际版 Global'
+          + (qgl.cliAuthenticated ? ' · CLI 已登录' : (qgl.desktopLoggedIn ? (' · 已登录' + (qgl.accountHint ? '(' + qgl.accountHint + ')' : '')) : ' · 已安装'))
+          + (qgl.ideInstalled ? ' · 含 IDE' : ''))
+        : '未检测到',
+      description: qgl.desktopInstalled
+        ? ('Qoder 国际版' + (qgl.version ? ' v' + qgl.version : '') + (qgl.ideInstalled ? '（含 Qoder IDE）' : '')
+          + ' · 内置 qodercli 引擎，点击切换至 Qoder 国际版')
+        : 'Qoder 国际版桌面端 / IDE（qoder.com）'
+    }
+  ];
+
+  return baseItems.concat(extraItems);
 }
 
 function detectAll() {
   const machine = detectNetworkAndMachine();
-  const cli = detectCliEnvironments();
-  const desktop = detectDesktopEnvironments();
+  const winMeta = collectWindowsShortcutsAndAppx();
+  const roots = IS_WIN ? candidateRootsWindows() : [];
+  const cli = detectCliEnvironments(winMeta, roots);
+  const desktop = detectDesktopEnvironments(winMeta, roots);
   return {
     ok: true,
     detectedAt: new Date().toISOString(),
@@ -730,5 +1301,7 @@ module.exports = {
   detectAll,
   detectNetworkAndMachine,
   detectCliEnvironments,
-  detectDesktopEnvironments
+  detectDesktopEnvironments,
+  detectWorkBuddyMeta,
+  detectQoderMeta
 };

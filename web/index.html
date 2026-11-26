@@ -360,7 +360,7 @@
     <div>
       <div class="remote-eyebrow">HEADLESS AGENT &amp; SUBSCRIPTION BRIDGE</div>
       <h1>远程 Agent · 客机无头 CLI 与订阅复用</h1>
-      <p>零打扰静默运行：不弹窗、不串流桌面、不影响客机正常使用。自动复用客机已登录的 CLI 与桌面端订阅（DeepSeek Harness / Codex / Hermes / Claude Code / Antigravity / OpenCode），在本机浏览器 0 延迟丝滑操作客机与主机同步的文件夹。</p>
+      <p>零打扰静默运行：不弹窗、不串流桌面、不影响客机正常使用。自动复用客机已登录的 CLI 与桌面端订阅（DeepSeek Harness / Codex / Hermes / Claude Code / Antigravity / WorkBuddy CN·AI / Qoder CN·国际版 / OpenCode），在本机浏览器 0 延迟丝滑操作客机与主机同步的文件夹。</p>
     </div>
     <div class="remote-head-actions">
       <button class="btn ghost" id="btnOpenInstallModal" type="button"><svg><use href="#i-plus"/></svg>安装 CLI / Desktop</button>
@@ -421,9 +421,11 @@
             <option value="codex">Codex CLI</option>
             <option value="claude">Claude Code</option>
             <option value="agy">Gemini · Antigravity</option>
+            <option value="workbuddy">WorkBuddy · CodeBuddy（CN / 国际版）</option>
+            <option value="qoder">Qoder CLI（CN 国内版 / 国际版）</option>
             <option value="opencode">OpenCode CLI</option>
           </select>
-          <small class="hint">DeepSeek Harness 直接复用客机桌面端官方订阅与自定义模型；Codex 自动读取客机本地 <code>~/.codex</code> 与 Hermes 登录并标明账号等级（free / plus / pro）；Antigravity 自动读取客机登录态，换号后点右侧刷新即可同步。</small>
+          <small class="hint">DeepSeek Harness 直接复用客机桌面端订阅；Codex 自动读取 <code>~/.codex</code> 与 Hermes 登录；WorkBuddy / Qoder 自动区分国内版 (CN) 与国际版，调用各自云端额度需在客机完成一次 CLI 登录或在下方绑定访问令牌 / PAT（WorkBuddy 桌面端自定义模型可直接无头调用）。</small>
         </label>
         <label class="field">
           <span>提供商 / 账号</span>
@@ -469,6 +471,28 @@
               placeholder="自定义 GOOGLE_GEMINI_BASE_URL（可选）">
             <button class="btn ghost cred-clear" type="button" data-cred-clear="agy">清除 Gemini 绑定</button>
           </div>
+          <div class="cred-card">
+            <div class="cred-head">
+              <b>WorkBuddy · CodeBuddy</b>
+              <span id="agentWbState">未绑定</span>
+            </div>
+            <input class="input" id="agentWbToken" type="password" autocomplete="off"
+              placeholder="CODEBUDDY_AUTH_TOKEN（留空用自定义模型或远端 /login）">
+            <input class="input" id="agentWbKey" type="password" autocomplete="off"
+              placeholder="或 CODEBUDDY_API_KEY（可选）">
+            <button class="btn ghost cred-clear" type="button" data-cred-clear="workbuddy">清除 WorkBuddy 绑定</button>
+          </div>
+          <div class="cred-card">
+            <div class="cred-head">
+              <b>Qoder（CN / 国际版）</b>
+              <span id="agentQoderState">未绑定</span>
+            </div>
+            <input class="input" id="agentQoderPatCn" type="password" autocomplete="off"
+              placeholder="Qoder CN 国内版 PAT（留空用客机 qoderclicn login）">
+            <input class="input" id="agentQoderPatGlobal" type="password" autocomplete="off"
+              placeholder="Qoder 国际版 PAT（留空用客机 qodercli login）">
+            <button class="btn ghost cred-clear" type="button" data-cred-clear="qoder">清除 Qoder 绑定</button>
+          </div>
         </div>
         <small class="hint">密钥只保存在本机 ~/.smac/agent-credentials.json；启动时才通过 SSH 上传到远端 ~/.smac-agent/credentials.json（600 权限），不会回传到页面。留空表示继续使用远端已有登录。</small>
       </div>
@@ -490,7 +514,7 @@
         </div>
         <ul>
           <li><b>完全不影响客机使用</b>：所有 CLI 与桌面端订阅均在客机 SSH 后台静默进程中运行，不弹出任何窗口、不抢占焦点、不占用客机显卡串流。</li>
-          <li><b>桌面端订阅无感桥接</b>：自动提取并复用客机 DeepSeek Harness Desktop、Codex / Hermes、Claude、Antigravity 的本地登录态与模型配置。</li>
+          <li><b>桌面端订阅无感桥接</b>：自动提取并复用客机 DeepSeek Harness Desktop、Codex / Hermes、Claude、Antigravity 的本地登录态，并自动识别 WorkBuddy（CN / 国际版）与 Qoder（CN / 国际版）内置无头引擎。</li>
           <li><b>本机 0 延迟交互 + 同步目录沙箱</b>：本机原生网页流式对话与目录文件浏览，文件读写严格锁定在主机与客机同步的文件夹内。</li>
         </ul>
       </article>

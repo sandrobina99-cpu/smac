@@ -48,11 +48,25 @@ const CREDENTIALS_FILE = path.join(DIR, 'credentials.json');
 const CLAUDE_SESSIONS = path.join(DIR, 'claude-sessions.json');
 const AGY_SESSIONS = path.join(DIR, 'agy-sessions.json');
 const DSH_SESSIONS = path.join(DIR, 'dsh-sessions.json');
+const WORKBUDDY_SESSIONS = path.join(DIR, 'workbuddy-sessions.json');
+const QODER_SESSIONS = path.join(DIR, 'qoder-sessions.json');
 const CLAUDE_MCP_FILE = path.join(DIR, 'claude-mcp.json');
+const SMAC_MCP_TOOLS_CSV = [
+  'mcp__smac__list_dir',
+  'mcp__smac__read_file',
+  'mcp__smac__read_image',
+  'mcp__smac__write_file',
+  'mcp__smac__replace_in_file',
+  'mcp__smac__make_dir',
+  'mcp__smac__move_path',
+  'mcp__smac__delete_path',
+  'mcp__smac__find_files',
+  'mcp__smac__grep'
+].join(',');
 const AGY_KEY_MARKER = path.join(DIR, 'agy-key-mode.json');
 const AGY_SETTINGS = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'settings.json');
 const AGY_MCP_CONFIG = path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
-const BACKEND_IDS = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'opencode'];
+const BACKEND_IDS = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'workbuddy', 'qoder', 'opencode'];
 const BACKEND_SET = new Set(BACKEND_IDS);
 const BACKEND_LABELS = {
   dsh: 'DeepSeek Harness',
@@ -60,6 +74,8 @@ const BACKEND_LABELS = {
   codex: 'Codex CLI',
   claude: 'Claude Code',
   agy: 'Gemini · Antigravity',
+  workbuddy: 'WorkBuddy · CodeBuddy',
+  qoder: 'Qoder CLI',
   opencode: 'OpenCode CLI'
 };
 const REAL_HERMES_HOME = process.env.SMAC_HERMES_HOME
@@ -89,6 +105,8 @@ let authState = null;
 let codexAuthState = null;
 const codexModelsCache = { at: 0, data: null };
 const agyModelsCache = { at: 0, data: null };
+const workbuddyModelsCache = { at: 0, data: null };
+const qoderModelsCache = { at: 0, data: null };
 const claudeAuthCache = { at: 0, data: null };
 let eventSeq = 0;
 const sseClients = new Set();
@@ -133,6 +151,8 @@ function loadCredentials() {
   const data = readJson(CREDENTIALS_FILE) || {};
   const claude = data.claude && typeof data.claude === 'object' ? data.claude : {};
   const agy = data.agy && typeof data.agy === 'object' ? data.agy : {};
+  const workbuddy = data.workbuddy && typeof data.workbuddy === 'object' ? data.workbuddy : {};
+  const qoder = data.qoder && typeof data.qoder === 'object' ? data.qoder : {};
   return {
     claude: {
       apiKey: String(claude.apiKey || '').trim(),
@@ -142,6 +162,14 @@ function loadCredentials() {
     agy: {
       apiKey: String(agy.apiKey || '').trim(),
       baseUrl: String(agy.baseUrl || '').trim()
+    },
+    workbuddy: {
+      apiKey: String(workbuddy.apiKey || '').trim(),
+      authToken: String(workbuddy.authToken || '').trim()
+    },
+    qoder: {
+      patCn: String(qoder.patCn || '').trim(),
+      patGlobal: String(qoder.patGlobal || '').trim()
     }
   };
 }
@@ -150,7 +178,9 @@ function credentialStatus() {
   const creds = loadCredentials();
   return {
     claude: { bound: Boolean(creds.claude.apiKey || creds.claude.oauthToken), baseUrl: Boolean(creds.claude.baseUrl) },
-    agy: { bound: Boolean(creds.agy.apiKey), baseUrl: Boolean(creds.agy.baseUrl) }
+    agy: { bound: Boolean(creds.agy.apiKey), baseUrl: Boolean(creds.agy.baseUrl) },
+    workbuddy: { bound: Boolean(creds.workbuddy.apiKey || creds.workbuddy.authToken) },
+    qoder: { bound: Boolean(creds.qoder.patCn || creds.qoder.patGlobal), patCn: Boolean(creds.qoder.patCn), patGlobal: Boolean(creds.qoder.patGlobal) }
   };
 }
 
@@ -1046,6 +1076,10 @@ function claudeSessionFor(name) { return sessionValueFor(CLAUDE_SESSIONS, name);
 function saveClaudeSession(name, id) { saveSessionValue(CLAUDE_SESSIONS, name, id); }
 function agySessionFor(name) { return sessionValueFor(AGY_SESSIONS, name); }
 function saveAgySession(name, id) { saveSessionValue(AGY_SESSIONS, name, id); }
+function workbuddySessionFor(name) { return sessionValueFor(WORKBUDDY_SESSIONS, name); }
+function saveWorkbuddySession(name, id) { saveSessionValue(WORKBUDDY_SESSIONS, name, id); }
+function qoderSessionFor(name) { return sessionValueFor(QODER_SESSIONS, name); }
+function saveQoderSession(name, id) { saveSessionValue(QODER_SESSIONS, name, id); }
 
 // The smac MCP server is the only tool boundary. Claude's built-in tools are
 // disabled with --tools "" and only mcp__smac__* is pre-approved, so a headless
@@ -1237,8 +1271,12 @@ function cleanAgyEnv(extra) {
   const extraPaths = IS_WIN ? [] : [
     '/opt/homebrew/bin',
     '/usr/local/bin',
+    '/usr/sbin',
+    '/sbin',
     path.join(os.homedir(), '.gemini', 'bin'),
-    path.join(os.homedir(), '.local', 'bin')
+    path.join(os.homedir(), '.local', 'bin'),
+    path.join(os.homedir(), '.qoder', 'bin', 'qodercli'),
+    path.join(os.homedir(), '.qoder-cn', 'bin', 'qoderclicn')
   ];
   const mergedPath = extraPaths.length
     ? Array.from(new Set(extraPaths.concat(basePath.split(path.delimiter).filter(Boolean)))).join(path.delimiter)
@@ -1479,6 +1517,300 @@ function agyAuthState() {
   // Account credentials live in the OS keyring, so they cannot be checked with
   // a file test. Headless agy reports the real auth error when the turn starts.
   return { installed: true, ready: true, bound: false, error: '' };
+}
+
+/* ---------------- WorkBuddy / Qoder backends ---------------- */
+
+function findWorkBuddyEditions() {
+  const meta = guestEnv.detectWorkBuddyMeta(os.homedir());
+  const editions = [];
+  if (meta.cn && meta.cn.cli) {
+    editions.push({
+      id: 'workbuddy-cn',
+      label: 'WorkBuddy CN（国内版）',
+      isCn: true,
+      cliPath: meta.cn.cli,
+      dataDir: path.join(os.homedir(), '.workbuddy'),
+      customModels: Array.isArray(meta.cn.customModels) ? meta.cn.customModels : [],
+      desktopLoggedIn: Boolean(meta.cn.desktopLoggedIn)
+    });
+  }
+  if (meta.global && meta.global.cli) {
+    editions.push({
+      id: 'workbuddy-global',
+      label: 'WorkBuddy AI（国际版）',
+      isCn: false,
+      cliPath: meta.global.cli,
+      dataDir: path.join(os.homedir(), '.workbuddy-ai'),
+      customModels: Array.isArray(meta.global.customModels) ? meta.global.customModels : [],
+      desktopLoggedIn: Boolean(meta.global.desktopLoggedIn)
+    });
+  }
+  if (!editions.length && meta.standaloneCli) {
+    editions.push({
+      id: 'codebuddy-cli',
+      label: 'CodeBuddy CLI',
+      isCn: meta.edition === 'cn',
+      cliPath: meta.standaloneCli,
+      dataDir: path.join(os.homedir(), meta.edition === 'cn' ? '.workbuddy' : '.codebuddy'),
+      customModels: [],
+      desktopLoggedIn: Boolean(meta.desktopLoggedIn)
+    });
+  }
+  return editions;
+}
+
+function findWorkBuddy() {
+  const eds = findWorkBuddyEditions();
+  return eds.length ? eds[0].cliPath : '';
+}
+
+function parseWorkBuddyHelpModels(helpText) {
+  const match = /Currently supported:\s*\(([^)]+)\)/i.exec(String(helpText || ''));
+  if (!match || !match[1]) { return []; }
+  return Array.from(new Set(match[1].split(',').map(s => s.trim()).filter(Boolean)));
+}
+
+function listWorkBuddyModels(forceRefresh) {
+  const now = Date.now();
+  if (!forceRefresh && workbuddyModelsCache.data && now - workbuddyModelsCache.at < 60 * 1000) {
+    return workbuddyModelsCache.data;
+  }
+  const editions = findWorkBuddyEditions();
+  if (!editions.length) {
+    const empty = {
+      backend: 'workbuddy',
+      active: '',
+      defaultProvider: '',
+      defaultModel: '',
+      missing: true,
+      error: '客机未检测到 WorkBuddy（国内版 CN / 国际版）或 CodeBuddy CLI。',
+      providers: [],
+      modelLabels: {},
+      reasoning: {}
+    };
+    workbuddyModelsCache.at = now;
+    workbuddyModelsCache.data = empty;
+    return empty;
+  }
+  const creds = loadCredentials().workbuddy;
+  const hasBound = Boolean(creds.apiKey || creds.authToken);
+  const modelLabels = {};
+  const reasoning = {};
+  const providers = editions.map((ed, idx) => {
+    const env = cleanAgyEnv({
+      CODEBUDDY_CONFIG_DIR: ed.dataDir,
+      WORKBUDDY_CONFIG_DIR: ed.dataDir,
+      CODEBUDDY_FORCE_LITE_WB_BUNDLE: '1'
+    });
+    if (ed.isCn) { env.CODEBUDDY_CN = '1'; }
+    let parsed = [];
+    try {
+      const spec = executableSpec(ed.cliPath, ['--help']);
+      const res = spawnSync(spec.command, spec.args, {
+        env,
+        timeout: 15000,
+        windowsHide: true,
+        windowsVerbatimArguments: Boolean(spec.windowsVerbatimArguments),
+        encoding: 'utf8',
+        maxBuffer: 4 * 1024 * 1024
+      });
+      parsed = parseWorkBuddyHelpModels(String((res && res.stdout) || '') + '\n' + String((res && res.stderr) || ''));
+    } catch { }
+    const customIds = ed.customModels.map(m => m.id);
+    const cloudIds = parsed.filter(id => !id.startsWith('custom-local:'));
+    const ordered = (!hasBound && customIds.length)
+      ? Array.from(new Set(customIds.concat(cloudIds)))
+      : Array.from(new Set(cloudIds.concat(customIds)));
+    if (!ordered.length) { ordered.push('auto'); }
+    ed.customModels.forEach(cm => {
+      modelLabels[cm.id] = cm.name + '（桌面端自定义 · 免额外登录）';
+    });
+    cloudIds.forEach(cid => {
+      if (!modelLabels[cid]) {
+        modelLabels[cid] = cid === 'auto'
+          ? 'auto（WorkBuddy 云端自动路由）'
+          : (cid + '（' + (ed.isCn ? 'WorkBuddy CN 云端' : 'WorkBuddy AI 云端') + '）');
+      }
+    });
+    ordered.forEach(slug => {
+      reasoning[slug] = { levels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultLevel: '', fast: false };
+    });
+    const statusHint = hasBound
+      ? ' · 已绑定令牌'
+      : (ed.customModels.length ? ' · 自定义模型可用' : (ed.desktopLoggedIn ? ' · 桌面端已登录' : ''));
+    return {
+      id: ed.id,
+      label: ed.label + statusHint,
+      models: ordered,
+      active: idx === 0
+    };
+  });
+  const chosen = providers[0];
+  const anyCustom = editions.some(e => e.customModels.length > 0);
+  const payload = {
+    backend: 'workbuddy',
+    active: chosen.id,
+    defaultProvider: chosen.id,
+    defaultModel: chosen.models[0] || 'auto',
+    missing: false,
+    error: (!hasBound && !anyCustom)
+      ? 'WorkBuddy 桌面端云账号受系统安全存储隔离：调用云端订阅额度请在客机终端执行 codebuddy /login，或在控制台绑定 CODEBUDDY_AUTH_TOKEN / API Key。'
+      : '',
+    providers,
+    modelLabels,
+    reasoning
+  };
+  workbuddyModelsCache.at = now;
+  workbuddyModelsCache.data = payload;
+  return payload;
+}
+
+function findQoderEditions() {
+  const meta = guestEnv.detectQoderMeta(os.homedir());
+  const editions = [];
+  for (const item of [meta.cn, meta.global]) {
+    if (!item || !item.cliInstalled) { continue; }
+    editions.push({
+      id: item.id,
+      isCn: item.edition === 'cn',
+      label: item.edition === 'cn' ? 'Qoder CN（国内版）' : 'Qoder（国际版）',
+      dataDir: item.dataDir,
+      standalone: item.standaloneCli || '',
+      worker: item.bundledWorker || '',
+      runner: item.runnerExe || '',
+      desktopLoggedIn: Boolean(item.desktopLoggedIn),
+      cliAuthenticated: Boolean(item.cliAuthenticated),
+      accountHint: item.accountHint || ''
+    });
+  }
+  return editions;
+}
+
+function findQoder() {
+  const eds = findQoderEditions();
+  return eds.length ? (eds[0].standalone || eds[0].worker) : '';
+}
+
+function qoderSpawnSpec(edition, cliArgs, pat) {
+  const env = cleanAgyEnv({
+    QODER_CONFIG_DIR: edition.dataDir
+  });
+  if (pat) {
+    env.QODER_PERSONAL_ACCESS_TOKEN = pat;
+    env.QODER_PAT = pat;
+  }
+  if (edition.standalone) {
+    const spec = executableSpec(edition.standalone, cliArgs);
+    return { command: spec.command, args: spec.args, windowsVerbatimArguments: Boolean(spec.windowsVerbatimArguments), env };
+  }
+  const runner = edition.runner || process.execPath;
+  if (edition.runner) { env.ELECTRON_RUN_AS_NODE = '1'; }
+  return { command: runner, args: [edition.worker].concat(cliArgs), windowsVerbatimArguments: false, env };
+}
+
+function parseQoderModelsList(text) {
+  const models = [];
+  const labels = {};
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    const t = rawLine.trim();
+    if (!t || /^(not logged|available|usage|error|version|account|─|═|-+$)/i.test(t)) { continue; }
+    const m = /^[*•\-\s]*([A-Za-z0-9][A-Za-z0-9._:/-]{1,80})(?:\s{2,}|\s+[—–-]\s+|\t+)(.+)$/.exec(t);
+    if (m && m[1]) {
+      models.push(m[1]);
+      labels[m[1]] = m[2].trim();
+    } else if (/^[A-Za-z0-9][A-Za-z0-9._:/-]{1,60}$/.test(t) && !/^\d+$/.test(t)) {
+      models.push(t);
+    }
+  }
+  return { models: Array.from(new Set(models)), labels };
+}
+
+function listQoderModels(forceRefresh) {
+  const now = Date.now();
+  if (!forceRefresh && qoderModelsCache.data && now - qoderModelsCache.at < 60 * 1000) {
+    return qoderModelsCache.data;
+  }
+  const editions = findQoderEditions();
+  if (!editions.length) {
+    const empty = {
+      backend: 'qoder',
+      active: '',
+      defaultProvider: '',
+      defaultModel: '',
+      missing: true,
+      error: '客机未检测到 Qoder（国内版 CN 或国际版）。',
+      providers: [],
+      modelLabels: {},
+      reasoning: {}
+    };
+    qoderModelsCache.at = now;
+    qoderModelsCache.data = empty;
+    return empty;
+  }
+  const creds = loadCredentials().qoder;
+  const modelLabels = {};
+  const reasoning = {};
+  const authWarnings = [];
+
+  const providers = editions.map((ed, idx) => {
+    const pat = ed.isCn ? creds.patCn : creds.patGlobal;
+    const spec = qoderSpawnSpec(ed, ['--list-models'], pat);
+    let out = '';
+    try {
+      const res = spawnSync(spec.command, spec.args, {
+        env: spec.env,
+        timeout: 15000,
+        windowsHide: true,
+        windowsVerbatimArguments: spec.windowsVerbatimArguments,
+        encoding: 'utf8',
+        maxBuffer: 4 * 1024 * 1024
+      });
+      out = String((res && res.stdout) || '') + '\n' + String((res && res.stderr) || '');
+    } catch { }
+    const notLoggedIn = /not logged in|please run.*login|authentication required/i.test(out);
+    const parsed = notLoggedIn ? { models: [], labels: {} } : parseQoderModelsList(out);
+    const models = parsed.models.length ? parsed.models : ['auto'];
+    Object.assign(modelLabels, parsed.labels);
+    if (!modelLabels.auto) { modelLabels.auto = 'auto（Qoder 自动选择模型）'; }
+    models.forEach(slug => {
+      reasoning[slug] = { levels: ['low', 'medium', 'high'], defaultLevel: '', fast: false };
+    });
+    const hintParts = [];
+    if (pat) { hintParts.push('已绑定 PAT'); }
+    else if (!notLoggedIn && parsed.models.length) { hintParts.push('CLI 已登录'); }
+    else if (ed.desktopLoggedIn) { hintParts.push('桌面端已登录' + (ed.accountHint ? ' · ' + ed.accountHint : '') + ' · 需 CLI 登录或 PAT'); }
+    else { hintParts.push('未登录 CLI'); }
+    if (notLoggedIn) {
+      authWarnings.push((ed.isCn ? 'Qoder CN' : 'Qoder 国际版') + ' 需先在客机终端执行一次 CLI login 或绑定 PAT');
+    }
+    return {
+      id: ed.id,
+      label: ed.label + (hintParts.length ? '（' + hintParts.join(' / ') + '）' : ''),
+      models,
+      active: idx === 0,
+      cliAuthenticated: !notLoggedIn
+    };
+  });
+
+  const authed = providers.find(p => p.cliAuthenticated);
+  const chosen = authed || providers[0];
+  const payload = {
+    backend: 'qoder',
+    active: chosen.id,
+    defaultProvider: chosen.id,
+    defaultModel: chosen.models[0] || 'auto',
+    missing: false,
+    error: (!authed && authWarnings.length)
+      ? ('Qoder 桌面端凭据受系统安全存储隔离：' + authWarnings.join('；') + '（同账号同额度）。')
+      : '',
+    providers,
+    modelLabels,
+    reasoning
+  };
+  qoderModelsCache.at = now;
+  qoderModelsCache.data = payload;
+  return payload;
 }
 
 function activeProvider() {
@@ -1932,9 +2264,12 @@ function createCodexParser(target) {
 }
 
 
-// Claude Code stream-json: system/init, stream_event (partial text deltas),
-// assistant (tool_use), user (tool_result), result (answer + usage + cost).
-function createClaudeParser(target) {
+// Claude Code / WorkBuddy / Qoder stream-json parser: system/init,
+// stream_event (partial text deltas), assistant (tool_use/text),
+// user (tool_result), result (answer + usage + cost).
+function createClaudeParser(target, saveSessionFn, labelName) {
+  const saveFn = typeof saveSessionFn === 'function' ? saveSessionFn : saveClaudeSession;
+  const backendTitle = labelName || 'Claude';
   const decoder = new StringDecoder('utf8');
   let pending = '';
   let sawDelta = false;
@@ -1972,13 +2307,14 @@ function createClaudeParser(target) {
 
   function handleEvent(event) {
     const type = String((event && event.type) || '');
-    if (type === 'system') {
+    if (type === 'system' || type === 'init') {
       const subtype = String(event.subtype || '');
-      if (event.session_id) {
-        target.sessionId = String(event.session_id);
-        saveClaudeSession(target.sessionName, target.sessionId);
+      const sid = String(event.session_id || event.sessionId || '');
+      if (sid) {
+        target.sessionId = sid;
+        saveFn(target.sessionName, target.sessionId);
       }
-      if (subtype === 'init') {
+      if (subtype === 'init' || type === 'init') {
         const servers = Array.isArray(event.mcp_servers) ? event.mcp_servers : [];
         servers.forEach(server => {
           if (!server || server.name !== 'smac') { return; }
@@ -2006,12 +2342,22 @@ function createClaudeParser(target) {
       return;
     }
     if (type === 'assistant') {
-      const content = event.message && Array.isArray(event.message.content) ? event.message.content : [];
-      content.forEach(block => {
-        if (!block || typeof block !== 'object') { return; }
-        if (block.type === 'tool_use') { toolActivity(block); }
-        else if (block.type === 'text' && block.text && !sawDelta) { emitAnswer(String(block.text)); }
-      });
+      const content = event.message && Array.isArray(event.message.content)
+        ? event.message.content
+        : (Array.isArray(event.content) ? event.content : []);
+      if (content.length) {
+        content.forEach(block => {
+          if (!block || typeof block !== 'object') { return; }
+          if (block.type === 'tool_use') { toolActivity(block); }
+          else if (block.type === 'text' && block.text && !sawDelta) { emitAnswer(String(block.text)); }
+        });
+      } else if (typeof event.content === 'string' && event.content && !sawDelta) {
+        emitAnswer(event.content);
+      }
+      return;
+    }
+    if (type === 'tool_use') {
+      toolActivity(event);
       return;
     }
     if (type === 'user') {
@@ -2026,26 +2372,27 @@ function createClaudeParser(target) {
         const parts = Array.isArray(block.content) ? block.content : [];
         const textPart = parts.find(part => part && part.type === 'text' && part.text);
         const image = parts.some(part => part && part.type === 'image');
-        const summaryText = summarize(textPart ? textPart.text : (image ? '[图片]' : ''));
+        const summaryText = summarize(textPart ? textPart.text : (typeof block.content === 'string' ? block.content : (image ? '[图片]' : '')));
         if (summaryText) { emitActivity('┊ ' + name + ' → ' + summaryText + '\n'); }
       });
       return;
     }
     if (type === 'result') {
-      if (event.session_id) {
-        target.sessionId = String(event.session_id);
-        saveClaudeSession(target.sessionName, target.sessionId);
+      const sid = String(event.session_id || event.sessionId || '');
+      if (sid) {
+        target.sessionId = sid;
+        saveFn(target.sessionName, target.sessionId);
       }
-      const answer = String(event.result || event.response || '').trim();
-      if (answer && !target.answer.trim()) { emitAnswer(answer); }
+      const answer = String(event.result || event.response || event.text || '').trim();
+      if (answer && !target.answer.trim() && !event.is_error) { emitAnswer(answer); }
       const usage = event.usage || {};
       const input = Number(usage.input_tokens || usage.inputTokens) || 0;
       const output = Number(usage.output_tokens || usage.outputTokens) || 0;
       target.usage = {
         input,
         output,
-        cached: Number(usage.cache_read_input_tokens || 0) || 0,
-        reasoning: 0
+        cached: Number(usage.cache_read_input_tokens || usage.cacheReadTokens || 0) || 0,
+        reasoning: Number(usage.reasoning_tokens || 0) || 0
       };
       const cost = Number(event.total_cost_usd);
       if (Number.isFinite(cost) && cost > 0) { target.usage.costUsd = Math.round(cost * 10000) / 10000; }
@@ -2058,8 +2405,8 @@ function createClaudeParser(target) {
         emitActivity('! 权限拒绝: ' + summarize(denial && (denial.tool_name || denial.tool || denial.message)) + '\n');
       });
       const subtype = String(event.subtype || '');
-      if (subtype && subtype !== 'success' && event.is_error) {
-        target.error = String(event.result || 'Claude 执行失败').slice(0, 500);
+      if (event.is_error || (subtype && subtype !== 'success' && subtype !== 'done')) {
+        target.error = String(event.result || event.error || event.message || (backendTitle + ' 执行失败')).slice(0, 500);
       }
       return;
     }
@@ -2409,7 +2756,7 @@ function deleteSessionRecord(sessionName) {
   catch (error) { return { error: '删除失败: ' + error.message }; }
   // Drop stale backend resume mappings as well, otherwise a future conversation
   // that happens to reuse the name would resume the deleted one.
-  for (const mapFile of [CODEX_SESSIONS, CLAUDE_SESSIONS, AGY_SESSIONS]) {
+  for (const mapFile of [CODEX_SESSIONS, CLAUDE_SESSIONS, AGY_SESSIONS, DSH_SESSIONS, WORKBUDDY_SESSIONS, QODER_SESSIONS]) {
     try {
       const map = loadSessionMap(mapFile);
       if (Object.prototype.hasOwnProperty.call(map, sessionName)) {
@@ -2752,6 +3099,12 @@ function startTurn(body) {
   }
   if (config.backend === 'agy') {
     return startAgyTurn({ prompt: effectivePrompt, displayPrompt: prompt, image, config, root, work, reasoning, body });
+  }
+  if (config.backend === 'workbuddy') {
+    return startWorkBuddyTurn({ prompt: effectivePrompt, displayPrompt: prompt, config, root, work, reasoning, body });
+  }
+  if (config.backend === 'qoder') {
+    return startQoderTurn({ prompt: effectivePrompt, displayPrompt: prompt, config, root, work, reasoning, body });
   }
   if (config.backend === 'opencode') {
     return startOpencodeTurn({ prompt: effectivePrompt, displayPrompt: prompt, config, root, work, body });
@@ -3382,6 +3735,334 @@ function startAgyTurn(options) {
   return { code: 200, turn: thisTurn };
 }
 
+// WorkBuddy / CodeBuddy backend: uses the bundled codebuddy-lite-wb.mjs
+// headlessly with built-in tools disallowed and smac MCP file tools explicitly
+// pre-approved (CODEBUDDY_DEFER_TOOL_LOADING=0).
+function startWorkBuddyTurn(options) {
+  const { prompt, displayPrompt, config, root, work, reasoning, body } = options;
+  const editions = findWorkBuddyEditions();
+  if (!editions.length) {
+    return { code: 400, error: '远端没有检测到 WorkBuddy（CN / 国际版）或 CodeBuddy CLI。' };
+  }
+  const requestedProvider = String(body.provider || config.provider || '').trim();
+  const edition = editions.find(e => e.id === requestedProvider) || editions[0];
+  const prepared = prepareClaudeMcp(work.path);
+  if (prepared.error) { return { code: 400, error: prepared.error }; }
+
+  const creds = loadCredentials().workbuddy;
+  const modelsInfo = listWorkBuddyModels(false);
+  const provInfo = (modelsInfo.providers || []).find(p => p.id === edition.id) || (modelsInfo.providers || [])[0];
+  let model = String(body.model || config.model || '').trim().slice(0, 160);
+  if (!model && provInfo && provInfo.models && provInfo.models.length) {
+    model = provInfo.models[0];
+  }
+
+  const sessionName = sanitizeSession(body.sessionName);
+  const sessionId = workbuddySessionFor(sessionName);
+  const id = newTurnId();
+  const turnDir = path.join(TURN_DIR, id);
+  fs.mkdirSync(turnDir, { recursive: true });
+  fs.writeFileSync(path.join(turnDir, 'prompt.txt'), prompt, 'utf8');
+
+  const args = [
+    '-p', prompt,
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--mcp-config', prepared.file,
+    '--strict-mcp-config',
+    '--disallowedTools', 'Bash,PowerShell,Read,Write,Edit,Glob,Grep,Agent,WebFetch,WebSearch',
+    '--allowedTools', SMAC_MCP_TOOLS_CSV,
+    '--permission-mode', 'dontAsk'
+  ];
+  if (sessionId) { args.push('--resume', sessionId); }
+  if (model && model !== 'auto') { args.push('--model', model); }
+
+  const extraEnv = {
+    CODEBUDDY_DEFER_TOOL_LOADING: '0',
+    CODEBUDDY_FORCE_LITE_WB_BUNDLE: '1',
+    CODEBUDDY_CONFIG_DIR: edition.dataDir,
+    WORKBUDDY_CONFIG_DIR: edition.dataDir
+  };
+  if (edition.isCn) { extraEnv.CODEBUDDY_CN = '1'; }
+  if (creds.authToken) { extraEnv.CODEBUDDY_AUTH_TOKEN = creds.authToken; }
+  if (creds.apiKey) { extraEnv.CODEBUDDY_API_KEY = creds.apiKey; }
+  const env = cleanAgyEnv(extraEnv);
+
+  const thisTurn = {
+    id,
+    status: 'running',
+    prompt: displayPrompt || prompt,
+    sessionName,
+    sessionId,
+    root: root.path,
+    rootLabel: root.label,
+    workdir: work.rel,
+    workdirPath: work.path,
+    backend: 'workbuddy',
+    provider: edition.id,
+    model: model || 'auto',
+    reasoning: reasoning || '',
+    fast: false,
+    image: '',
+    images: [],
+    imageCandidates: [],
+    usage: null,
+    startedAt: new Date().toISOString(),
+    endedAt: '',
+    durationMs: null,
+    exitCode: null,
+    answer: '',
+    activity: '',
+    raw: '',
+    error: '',
+    note: '',
+    historySaved: false,
+    events: []
+  };
+  turn = thisTurn;
+  eventSeq = 0;
+  beginHistoryTurn(thisTurn);
+  const parser = createClaudeParser(thisTurn, saveWorkbuddySession, 'WorkBuddy');
+  log('turn ' + id + ' start backend=workbuddy edition=' + edition.id + ' root=' + root.path
+    + ' workdir=' + (work.rel || '.') + ' model=' + (model || 'auto') + ' resume=' + (sessionId || 'no'));
+
+  const spec = executableSpec(edition.cliPath, args);
+  let child;
+  try {
+    child = spawn(spec.command, spec.args, {
+      cwd: work.path,
+      env,
+      windowsHide: true,
+      windowsVerbatimArguments: Boolean(spec.windowsVerbatimArguments),
+      detached: !IS_WIN,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+  } catch (error) {
+    thisTurn.status = 'error';
+    thisTurn.endedAt = new Date().toISOString();
+    thisTurn.error = '启动 WorkBuddy 失败: ' + error.message;
+    finishHistoryTurn(thisTurn);
+    emit({ type: 'done', turn: publicTurnOf(thisTurn) }, thisTurn);
+    return { code: 500, error: thisTurn.error };
+  }
+  runningChild = child;
+  emit({ type: 'state', turn: publicTurnOf(thisTurn) }, thisTurn);
+
+  const timer = setTimeout(() => {
+    if (thisTurn.status !== 'running') { return; }
+    thisTurn.error = `任务超时（${config.timeoutSeconds} 秒），已终止。`;
+    killTree(child);
+  }, config.timeoutSeconds * 1000);
+  timer.unref();
+
+  child.stdout.on('data', chunk => parser.push(chunk));
+  child.stderr.on('data', chunk => {
+    thisTurn.raw += chunk.toString('utf8');
+    if (thisTurn.raw.length > MAX_RAW) { thisTurn.raw = thisTurn.raw.slice(-MAX_RAW); }
+  });
+  child.on('error', error => {
+    if (thisTurn.status !== 'running') { return; }
+    thisTurn.status = 'error';
+    thisTurn.endedAt = new Date().toISOString();
+    thisTurn.error = '运行 WorkBuddy 失败: ' + error.message;
+    clearTimeout(timer);
+  });
+  child.on('close', code => {
+    clearTimeout(timer);
+    if (runningChild === child) { runningChild = null; }
+    try { parser.flush(); } catch { }
+    if (thisTurn.status !== 'running') {
+      discoverTurnImages(thisTurn);
+      finishHistoryTurn(thisTurn);
+      return;
+    }
+    thisTurn.exitCode = code;
+    thisTurn.endedAt = new Date().toISOString();
+    thisTurn.durationMs = Date.parse(thisTurn.endedAt) - Date.parse(thisTurn.startedAt);
+    thisTurn.answer = thisTurn.answer.trim();
+    thisTurn.activity = thisTurn.activity.replace(/\s+$/, '');
+    const combinedErr = (thisTurn.error + '\n' + thisTurn.raw).trim();
+    if (code === 0 && thisTurn.answer && !thisTurn.error) {
+      thisTurn.status = 'done';
+      thisTurn.error = '';
+    } else {
+      thisTurn.status = 'error';
+      if (/authentication required|please use \/login|sign in to your account/i.test(combinedErr)) {
+        thisTurn.error = 'WorkBuddy 云端账号未授权给无头 CLI（桌面端登录态受系统安全隔离）。可选用桌面端自定义模型（custom-local:*），或在客机终端执行 codebuddy /login，或在控制台绑定 CODEBUDDY_AUTH_TOKEN。';
+      } else if (!thisTurn.error) {
+        thisTurn.error = code === 0
+          ? 'WorkBuddy 没有返回可显示的回复。'
+          : ('WorkBuddy 退出码 ' + code + (thisTurn.raw ? '：' + thisTurn.raw.trim().slice(-400) : ''));
+      }
+    }
+    log('turn ' + thisTurn.id + ' ' + thisTurn.status + ' code=' + code + ' ms=' + thisTurn.durationMs
+      + ' images=' + discoverTurnImages(thisTurn).length);
+    finishHistoryTurn(thisTurn);
+    emit({ type: 'done', turn: publicTurnOf(thisTurn) }, thisTurn);
+  });
+  return { code: 200, turn: thisTurn };
+}
+
+// Qoder CLI backend (CN & Global): uses standalone qoderclicn/qodercli or the
+// desktop app's bundled qoder-worker-runtime.obf.mjs via ELECTRON_RUN_AS_NODE=1
+// with built-in tools disabled and smac MCP file tools pre-approved.
+function startQoderTurn(options) {
+  const { prompt, displayPrompt, config, root, work, reasoning, body } = options;
+  const editions = findQoderEditions();
+  if (!editions.length) {
+    return { code: 400, error: '远端没有检测到 Qoder（国内版 CN 或国际版）。' };
+  }
+  const requestedProvider = String(body.provider || config.provider || '').trim();
+  const edition = editions.find(e => e.id === requestedProvider) || editions[0];
+  const prepared = prepareClaudeMcp(work.path);
+  if (prepared.error) { return { code: 400, error: prepared.error }; }
+
+  const creds = loadCredentials().qoder;
+  const pat = edition.isCn ? creds.patCn : creds.patGlobal;
+  let model = String(body.model || config.model || '').trim().slice(0, 160);
+  const sessionName = sanitizeSession(body.sessionName);
+  const sessionId = qoderSessionFor(sessionName + ':' + edition.id);
+  const id = newTurnId();
+  const turnDir = path.join(TURN_DIR, id);
+  fs.mkdirSync(turnDir, { recursive: true });
+  fs.writeFileSync(path.join(turnDir, 'prompt.txt'), prompt, 'utf8');
+
+  const args = [
+    '-p',
+    '--output-format', 'stream-json',
+    '--mcp-config', prepared.file,
+    '--strict-mcp-config',
+    '--tools', '',
+    '--allowed-tools', SMAC_MCP_TOOLS_CSV,
+    '--allowed-mcp-server-names', 'smac',
+    '--permission-mode', 'dont_ask',
+    '-w', work.path
+  ];
+  if (sessionId) { args.push('-r', sessionId); }
+  if (model && model !== 'auto') { args.push('-m', model); }
+  if (reasoning && ['low', 'medium', 'high'].includes(reasoning)) {
+    args.push('--reasoning-effort', reasoning);
+  }
+  args.push(prompt);
+
+  const spec = qoderSpawnSpec(edition, args, pat);
+
+  const thisTurn = {
+    id,
+    status: 'running',
+    prompt: displayPrompt || prompt,
+    sessionName,
+    sessionId,
+    root: root.path,
+    rootLabel: root.label,
+    workdir: work.rel,
+    workdirPath: work.path,
+    backend: 'qoder',
+    provider: edition.id,
+    model: model || 'auto',
+    reasoning: reasoning || '',
+    fast: false,
+    image: '',
+    images: [],
+    imageCandidates: [],
+    usage: null,
+    startedAt: new Date().toISOString(),
+    endedAt: '',
+    durationMs: null,
+    exitCode: null,
+    answer: '',
+    activity: '',
+    raw: '',
+    error: '',
+    note: '',
+    historySaved: false,
+    events: []
+  };
+  turn = thisTurn;
+  eventSeq = 0;
+  beginHistoryTurn(thisTurn);
+  const parser = createClaudeParser(thisTurn, (name, sid) => saveQoderSession(name + ':' + edition.id, sid), 'Qoder');
+  log('turn ' + id + ' start backend=qoder edition=' + edition.id + ' root=' + root.path
+    + ' workdir=' + (work.rel || '.') + ' model=' + (model || 'auto') + ' resume=' + (sessionId || 'no'));
+
+  let child;
+  try {
+    child = spawn(spec.command, spec.args, {
+      cwd: work.path,
+      env: spec.env,
+      windowsHide: true,
+      windowsVerbatimArguments: Boolean(spec.windowsVerbatimArguments),
+      detached: !IS_WIN,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+  } catch (error) {
+    thisTurn.status = 'error';
+    thisTurn.endedAt = new Date().toISOString();
+    thisTurn.error = '启动 Qoder 失败: ' + error.message;
+    finishHistoryTurn(thisTurn);
+    emit({ type: 'done', turn: publicTurnOf(thisTurn) }, thisTurn);
+    return { code: 500, error: thisTurn.error };
+  }
+  runningChild = child;
+  emit({ type: 'state', turn: publicTurnOf(thisTurn) }, thisTurn);
+
+  const timer = setTimeout(() => {
+    if (thisTurn.status !== 'running') { return; }
+    thisTurn.error = `任务超时（${config.timeoutSeconds} 秒），已终止。`;
+    killTree(child);
+  }, config.timeoutSeconds * 1000);
+  timer.unref();
+
+  child.stdout.on('data', chunk => parser.push(chunk));
+  child.stderr.on('data', chunk => {
+    thisTurn.raw += chunk.toString('utf8');
+    if (thisTurn.raw.length > MAX_RAW) { thisTurn.raw = thisTurn.raw.slice(-MAX_RAW); }
+  });
+  child.on('error', error => {
+    if (thisTurn.status !== 'running') { return; }
+    thisTurn.status = 'error';
+    thisTurn.endedAt = new Date().toISOString();
+    thisTurn.error = '运行 Qoder 失败: ' + error.message;
+    clearTimeout(timer);
+  });
+  child.on('close', code => {
+    clearTimeout(timer);
+    if (runningChild === child) { runningChild = null; }
+    try { parser.flush(); } catch { }
+    if (thisTurn.status !== 'running') {
+      discoverTurnImages(thisTurn);
+      finishHistoryTurn(thisTurn);
+      return;
+    }
+    thisTurn.exitCode = code;
+    thisTurn.endedAt = new Date().toISOString();
+    thisTurn.durationMs = Date.parse(thisTurn.endedAt) - Date.parse(thisTurn.startedAt);
+    thisTurn.answer = thisTurn.answer.trim();
+    thisTurn.activity = thisTurn.activity.replace(/\s+$/, '');
+    const combinedErr = (thisTurn.error + '\n' + thisTurn.raw).trim();
+    if (code === 0 && thisTurn.answer && !thisTurn.error) {
+      thisTurn.status = 'done';
+      thisTurn.error = '';
+    } else {
+      thisTurn.status = 'error';
+      if (/not logged in|please run.*login|authentication required|invalid.*token/i.test(combinedErr)) {
+        const loginCmd = edition.isCn ? 'qoderclicn login' : 'qodercli login';
+        thisTurn.error = (edition.isCn ? 'Qoder CN' : 'Qoder 国际版')
+          + ' 尚未对无头 CLI 授权（桌面端凭据受系统安全存储隔离）。请在客机 SSH 终端执行一次 ' + loginCmd + '，或在控制台绑定对应版本的 Personal Access Token（PAT）。';
+      } else if (!thisTurn.error) {
+        thisTurn.error = code === 0
+          ? 'Qoder 没有返回可显示的回复。'
+          : ('Qoder 退出码 ' + code + (thisTurn.raw ? '：' + thisTurn.raw.trim().slice(-400) : ''));
+      }
+    }
+    log('turn ' + thisTurn.id + ' ' + thisTurn.status + ' code=' + code + ' ms=' + thisTurn.durationMs
+      + ' images=' + discoverTurnImages(thisTurn).length);
+    finishHistoryTurn(thisTurn);
+    emit({ type: 'done', turn: publicTurnOf(thisTurn) }, thisTurn);
+  });
+  return { code: 200, turn: thisTurn };
+}
+
 function cancelTurn() {
   if (!turn || turn.status !== 'running') { return { code: 200, cancelled: false, turn: publicTurn() }; }
   const t = turn;
@@ -4004,13 +4685,17 @@ async function handle(req, res) {
       : backend === 'codex' ? await listCodexModels(refresh)
         : backend === 'claude' ? listClaudeModels()
           : backend === 'agy' ? listAgyModels(refresh)
-            : backend === 'opencode' ? listOpencodeModels()
-              : listModels();
+            : backend === 'workbuddy' ? listWorkBuddyModels(refresh)
+              : backend === 'qoder' ? listQoderModels(refresh)
+                : backend === 'opencode' ? listOpencodeModels()
+                  : listModels();
     const dsh = findDsh();
     const hermes = findHermes();
     const codex = findCodex();
     const claude = findClaude();
     const agy = findAgy();
+    const workbuddy = findWorkBuddy();
+    const qoder = findQoder();
     const opencode = findOpencode();
     const claudeState = claude ? claudeAuthState() : { error: '远端没有安装 Claude Code CLI' };
     const agyState = agy
@@ -4023,8 +4708,10 @@ async function handle(req, res) {
       : backend === 'codex' ? (codexPrepared.error || models.error || '')
         : backend === 'claude' ? (claudeState.error || '')
           : backend === 'agy' ? (agyState.error || models.error || '')
-            : backend === 'opencode' ? (opencode ? '' : '远端没有安装 OpenCode CLI')
-              : prepareAuth();
+            : backend === 'workbuddy' ? (workbuddy ? (models.error || '') : '远端没有检测到 WorkBuddy（CN / 国际版）')
+              : backend === 'qoder' ? (qoder ? (models.error || '') : '远端没有检测到 Qoder（CN / 国际版）')
+                : backend === 'opencode' ? (opencode ? '' : '远端没有安装 OpenCode CLI')
+                  : prepareAuth();
     const validProviders = Array.isArray(models.providers) ? models.providers : [];
     const chosenProviderObj = validProviders.find(p => p.id === config.provider) || validProviders.find(p => p.id === models.defaultProvider) || validProviders[0];
     const resolvedProvider = chosenProviderObj ? chosenProviderObj.id : (models.defaultProvider || '');
@@ -4045,6 +4732,8 @@ async function handle(req, res) {
         codex: Boolean(codex),
         claude: Boolean(claude),
         agy: Boolean(agy),
+        workbuddy: Boolean(workbuddy),
+        qoder: Boolean(qoder),
         opencode: Boolean(opencode)
       },
       provider: resolvedProvider,
@@ -4056,6 +4745,8 @@ async function handle(req, res) {
       codex: Boolean(codex),
       claude: Boolean(claude),
       agy: Boolean(agy),
+      workbuddy: Boolean(workbuddy),
+      qoder: Boolean(qoder),
       opencode: Boolean(opencode),
       authError,
       codexAuthError: codexPrepared.error || '',
@@ -4076,14 +4767,18 @@ async function handle(req, res) {
     if (refresh) {
       codexModelsCache.at = 0;
       agyModelsCache.at = 0;
+      workbuddyModelsCache.at = 0;
+      qoderModelsCache.at = 0;
       claudeAuthCache.at = 0;
     }
     sendJson(res, 200, backend === 'dsh' ? listDshModels()
       : backend === 'codex' ? await listCodexModels(refresh)
         : backend === 'claude' ? listClaudeModels()
           : backend === 'agy' ? listAgyModels(refresh)
-            : backend === 'opencode' ? listOpencodeModels()
-              : listModels());
+            : backend === 'workbuddy' ? listWorkBuddyModels(refresh)
+              : backend === 'qoder' ? listQoderModels(refresh)
+                : backend === 'opencode' ? listOpencodeModels()
+                  : listModels());
     return;
   }
 
@@ -4183,6 +4878,20 @@ async function handle(req, res) {
       }
       const prepared = prepareAgyConfig(rootPath);
       if (prepared.error) { sendJson(res, 400, { error: prepared.error }); return; }
+    } else if (backend === 'workbuddy') {
+      if (!findWorkBuddy()) {
+        sendJson(res, 400, { error: '远端没有检测到 WorkBuddy（CN / 国际版）或 CodeBuddy CLI。' });
+        return;
+      }
+      const prepared = prepareClaudeMcp(rootPath);
+      if (prepared.error) { sendJson(res, 400, { error: prepared.error }); return; }
+    } else if (backend === 'qoder') {
+      if (!findQoder()) {
+        sendJson(res, 400, { error: '远端没有检测到 Qoder（国内版 CN 或国际版）。' });
+        return;
+      }
+      const prepared = prepareClaudeMcp(rootPath);
+      if (prepared.error) { sendJson(res, 400, { error: prepared.error }); return; }
     } else if (backend === 'opencode') {
       if (!findOpencode()) {
         sendJson(res, 400, { error: '远端没有安装 OpenCode CLI。' });
@@ -4207,8 +4916,10 @@ async function handle(req, res) {
         : backend === 'codex' ? await listCodexModels(true)
           : backend === 'claude' ? listClaudeModels()
             : backend === 'agy' ? listAgyModels(true)
-              : backend === 'opencode' ? listOpencodeModels()
-                : listModels()
+              : backend === 'workbuddy' ? listWorkBuddyModels(true)
+                : backend === 'qoder' ? listQoderModels(true)
+                  : backend === 'opencode' ? listOpencodeModels()
+                    : listModels()
     });
     return;
   }

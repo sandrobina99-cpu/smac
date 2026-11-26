@@ -1165,7 +1165,7 @@ async function handleApi(req, res, url) {
     const denyMsg = checkDirectDeviceById(deviceId);
     if (denyMsg) { sendJson(res, 403, { ok: false, error: denyMsg, providers: [] }); return; }
     const raw = String(url.searchParams.get('backend') || '').trim().toLowerCase();
-    const backend = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'opencode'].includes(raw) ? raw : 'hermes';
+    const backend = ['dsh', 'hermes', 'codex', 'claude', 'agy', 'workbuddy', 'qoder', 'opencode'].includes(raw) ? raw : 'hermes';
     try {
       const models = await agent.modelsForDevice(deviceId, backend);
       sendJson(res, 200, models);

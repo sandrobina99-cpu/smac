@@ -826,6 +826,8 @@ const AGENT_BACKEND_LABELS = {
   codex: 'Codex CLI',
   claude: 'Claude Code',
   agy: 'Gemini · Antigravity',
+  workbuddy: 'WorkBuddy · CodeBuddy',
+  qoder: 'Qoder CLI',
   opencode: 'OpenCode CLI'
 };
 
@@ -834,13 +836,20 @@ const DESKTOP_TO_CLI_MAP = {
   'claude-desktop': 'claude',
   'codex-desktop': 'codex',
   'antigravity-desktop': 'agy',
+  'workbuddy-desktop': 'workbuddy',
+  'qoder-cn-desktop': 'qoder',
+  'qoder-desktop': 'qoder',
   'hermes-desktop': 'hermes',
   'opencode-desktop': 'opencode'
 };
 
 function normalizeAgentBackend(value) {
   const id = String(value || '').toLowerCase();
-  return ['dsh', 'hermes', 'codex', 'claude', 'agy', 'opencode'].includes(id) ? id : 'hermes';
+  return ['dsh', 'hermes', 'codex', 'claude', 'agy', 'workbuddy', 'qoder', 'opencode'].includes(id) ? id : 'hermes';
+}
+
+function isMultiProviderBackend(backend) {
+  return ['hermes', 'dsh', 'codex', 'workbuddy', 'qoder'].includes(backend);
 }
 
 function agentBackendLabel(value) {
@@ -857,6 +866,9 @@ function renderGuestEnvCards(envData) {
     { id: 'claude-desktop', name: 'Claude Desktop', installed: false, badge: '待检测', description: 'Anthropic Claude 桌面端 · 桥接 Claude Code' },
     { id: 'codex-desktop', name: 'Codex Desktop', installed: false, badge: '待检测', description: 'OpenAI Codex 桌面端 · 桥接 Codex CLI' },
     { id: 'antigravity-desktop', name: 'Antigravity Desktop', installed: false, badge: '待检测', description: 'Google Antigravity 桌面端 · 桥接 agy CLI' },
+    { id: 'workbuddy-desktop', name: 'WorkBuddy', installed: false, badge: '待检测', description: '腾讯 WorkBuddy 桌面端 · 自动区分 CN / 国际版' },
+    { id: 'qoder-cn-desktop', name: 'Qoder CN（国内版）', installed: false, badge: '待检测', preferredProvider: 'qoder-cn', description: 'Qoder 国内版桌面端 / IDE · 内置 qoderclicn' },
+    { id: 'qoder-desktop', name: 'Qoder（国际版）', installed: false, badge: '待检测', preferredProvider: 'qoder-global', description: 'Qoder 国际版桌面端 / IDE · 内置 qodercli' },
     { id: 'hermes-desktop', name: 'Hermes Desktop', installed: false, badge: '待检测', description: 'Hermes Agent 桌面端 · 桥接 Hermes CLI' },
     { id: 'opencode-desktop', name: 'OpenCode Desktop', installed: false, badge: '待检测', description: 'OpenCode 桌面端 · 桥接 OpenCode CLI' }
   ];
@@ -867,10 +879,13 @@ function renderGuestEnvCards(envData) {
     { id: 'codex', name: 'Codex CLI', installed: false, autoInstall: true, badge: '可自动安装', description: '复用客机 ChatGPT / Codex 登录状态' },
     { id: 'claude', name: 'Claude Code', installed: false, autoInstall: true, badge: '可自动安装', description: '支持客机登录或密钥绑定' },
     { id: 'agy', name: 'Gemini · Antigravity', installed: false, autoInstall: true, badge: '可自动安装', description: '支持客机登录或密钥绑定' },
+    { id: 'workbuddy', name: 'WorkBuddy · CodeBuddy', installed: false, badge: '待检测', description: '自动区分国内版 CN / 国际版 · 内置无头 CLI' },
+    { id: 'qoder', name: 'Qoder CLI', installed: false, badge: '待检测', description: '自动区分 Qoder CN 国内版与国际版 · 内置无头引擎' },
     { id: 'opencode', name: 'OpenCode CLI', installed: false, badge: '待检测', description: '客机 OpenCode 命令行' }
   ];
 
   const currentCli = $('#agentBackend') ? normalizeAgentBackend($('#agentBackend').value) : 'hermes';
+  const currentProv = $('#agentProvider') ? String($('#agentProvider').value || '') : '';
 
   cliBox.innerHTML = clis.map(item => {
     const isSelected = currentCli === item.id;
@@ -887,7 +902,8 @@ function renderGuestEnvCards(envData) {
   const sortedDesktops = desktops.slice().sort((a, b) => (b.installed ? 1 : 0) - (a.installed ? 1 : 0));
   desktopBox.innerHTML = sortedDesktops.map(item => {
     const mappedCli = DESKTOP_TO_CLI_MAP[item.id] || '';
-    const isSelected = Boolean(mappedCli && mappedCli === currentCli);
+    const prefProv = item.preferredProvider || '';
+    const isSelected = Boolean(mappedCli && mappedCli === currentCli && (!prefProv || !currentProv || currentProv === prefProv));
     const badgeClass = item.installed ? 'ok' : '';
     const badgeText = item.installed
       ? ((item.badge && item.badge !== '已安装') ? item.badge : (mappedCli ? '已安装 · 可无头复用' : '已安装'))
@@ -895,7 +911,8 @@ function renderGuestEnvCards(envData) {
     return '<button type="button" class="guest-env-card'
       + (isSelected ? ' selected' : '')
       + (item.installed ? '' : ' missing')
-      + '" data-desktop-id="' + escapeHtml(item.id) + '" data-mapped-cli="' + escapeHtml(mappedCli) + '">'
+      + '" data-desktop-id="' + escapeHtml(item.id) + '" data-mapped-cli="' + escapeHtml(mappedCli) + '"'
+      + (prefProv ? ' data-preferred-provider="' + escapeHtml(prefProv) + '"' : '') + '>'
       + '<div class="ge-top"><b>' + escapeHtml(item.name) + '</b>'
       + '<span class="ge-badge ' + badgeClass + '">' + escapeHtml(badgeText) + '</span></div>'
       + '<div class="ge-desc">' + escapeHtml(item.description || '') + '</div>'
@@ -1023,7 +1040,7 @@ async function loadAgentModels(deviceId, backend, preferredProvider, preferredMo
   const modelSelect = $('#agentModel');
   if (!providerSelect || !modelSelect) return;
   backend = normalizeAgentBackend(backend);
-  const multiProvider = (backend === 'hermes' || backend === 'dsh' || backend === 'codex');
+  const multiProvider = isMultiProviderBackend(backend);
   providerSelect.disabled = !multiProvider;
   if (!deviceId) {
     providerSelect.innerHTML = '<option value="">自动（远端登录）</option>';
@@ -1058,9 +1075,11 @@ async function loadAgentModels(deviceId, backend, preferredProvider, preferredMo
     const box = $('#agentError');
     if (box) {
       box.hidden = false;
-      box.textContent = backend === 'dsh'
+      box.textContent = models.error || (backend === 'dsh'
         ? '客机尚未安装 DeepSeek Harness 桌面端；请先在客机安装并登录 DeepSeek Harness，或切换其他 CLI 引擎。'
-        : ('远端还没有安装 ' + agentBackendLabel(backend) + '；启动时会自动安装，首次启动可能需要几分钟。');
+        : ((backend === 'workbuddy' || backend === 'qoder')
+          ? ('客机尚未检测到 ' + agentBackendLabel(backend) + '；请先在客机安装对应客户端或 CLI。')
+          : ('远端还没有安装 ' + agentBackendLabel(backend) + '；启动时会自动安装，首次启动可能需要几分钟。')));
     }
   } else if (models && models.error) {
     const box = $('#agentError');
@@ -1163,21 +1182,35 @@ async function refreshAgentOptions(force) {
 }
 
 function setCredState(backend, credential) {
-  const el = $(backend === 'claude' ? '#agentClaudeState' : '#agentAgyState');
+  const selectorMap = {
+    claude: '#agentClaudeState',
+    agy: '#agentAgyState',
+    workbuddy: '#agentWbState',
+    qoder: '#agentQoderState'
+  };
+  const el = $(selectorMap[backend] || '');
   if (!el) return;
-  el.textContent = credential && credential.bound ? '已绑定访问密钥' : '未绑定（用远端登录）';
+  if (backend === 'qoder' && credential && credential.bound) {
+    const parts = [];
+    if (credential.hasPatCn) parts.push('CN');
+    if (credential.hasPatGlobal) parts.push('国际版');
+    el.textContent = '已绑定 PAT' + (parts.length ? '（' + parts.join(' + ') + '）' : '');
+  } else {
+    el.textContent = credential && credential.bound ? '已绑定访问密钥' : '未绑定（用远端登录）';
+  }
   el.classList.toggle('on', Boolean(credential && credential.bound));
 }
 
 async function loadAgentCredentials(deviceId) {
-  $('#agentClaudeKey').value = '';
-  $('#agentClaudeToken').value = '';
-  $('#agentClaudeBase').value = '';
-  $('#agentAgyKey').value = '';
-  $('#agentAgyBase').value = '';
+  for (const sel of ['#agentClaudeKey', '#agentClaudeToken', '#agentClaudeBase', '#agentAgyKey', '#agentAgyBase', '#agentWbToken', '#agentWbKey', '#agentQoderPatCn', '#agentQoderPatGlobal']) {
+    const input = $(sel);
+    if (input) input.value = '';
+  }
   if (!deviceId) {
     setCredState('claude', null);
     setCredState('agy', null);
+    setCredState('workbuddy', null);
+    setCredState('qoder', null);
     return;
   }
   try {
@@ -1185,6 +1218,8 @@ async function loadAgentCredentials(deviceId) {
     const credentials = result.credentials || {};
     setCredState('claude', credentials.claude);
     setCredState('agy', credentials.agy);
+    setCredState('workbuddy', credentials.workbuddy);
+    setCredState('qoder', credentials.qoder);
     if (credentials.claude && credentials.claude.baseUrl) {
       $('#agentClaudeBase').placeholder = '已保存 ANTHROPIC_BASE_URL（留空保持不变）';
     }
@@ -1194,23 +1229,44 @@ async function loadAgentCredentials(deviceId) {
   } catch {
     setCredState('claude', null);
     setCredState('agy', null);
+    setCredState('workbuddy', null);
+    setCredState('qoder', null);
   }
 }
 
 function agentCredentialPayload() {
   const claude = {};
   const agy = {};
-  const claudeKey = $('#agentClaudeKey').value.trim();
-  const claudeToken = $('#agentClaudeToken').value.trim();
-  const claudeBase = $('#agentClaudeBase').value.trim();
-  const agyKey = $('#agentAgyKey').value.trim();
-  const agyBase = $('#agentAgyBase').value.trim();
+  const workbuddy = {};
+  const qoder = {};
+  const val = sel => {
+    const el = $(sel);
+    return el ? el.value.trim() : '';
+  };
+  const claudeKey = val('#agentClaudeKey');
+  const claudeToken = val('#agentClaudeToken');
+  const claudeBase = val('#agentClaudeBase');
+  const agyKey = val('#agentAgyKey');
+  const agyBase = val('#agentAgyBase');
+  const wbToken = val('#agentWbToken');
+  const wbKey = val('#agentWbKey');
+  const qoderPatCn = val('#agentQoderPatCn');
+  const qoderPatGlobal = val('#agentQoderPatGlobal');
   if (claudeKey) claude.apiKey = claudeKey;
   if (claudeToken) claude.oauthToken = claudeToken;
   if (claudeBase) claude.baseUrl = claudeBase;
   if (agyKey) agy.apiKey = agyKey;
   if (agyBase) agy.baseUrl = agyBase;
-  return { claude, agy };
+  if (wbToken) workbuddy.authToken = wbToken;
+  if (wbKey) workbuddy.apiKey = wbKey;
+  if (qoderPatCn) qoder.patCn = qoderPatCn;
+  if (qoderPatGlobal) qoder.patGlobal = qoderPatGlobal;
+  return { claude, agy, workbuddy, qoder };
+}
+
+function hasAnyAgentCredentialInput(payload) {
+  if (!payload) return false;
+  return ['claude', 'agy', 'workbuddy', 'qoder'].some(k => payload[k] && Object.keys(payload[k]).length > 0);
 }
 
 async function clearAgentCredentials(deviceId, backend) {
@@ -1249,10 +1305,12 @@ async function startAgent() {
   button.textContent = '正在启动…';
   try {
     const credentials = agentCredentialPayload();
-    if (Object.keys(credentials.claude).length || Object.keys(credentials.agy).length) {
+    if (hasAnyAgentCredentialInput(credentials)) {
       const saved = await post('/api/agent/credentials', Object.assign({ deviceId }, credentials));
       setCredState('claude', saved.credentials && saved.credentials.claude);
       setCredState('agy', saved.credentials && saved.credentials.agy);
+      setCredState('workbuddy', saved.credentials && saved.credentials.workbuddy);
+      setCredState('qoder', saved.credentials && saved.credentials.qoder);
     }
     const result = await post('/api/agent/start', {
       deviceId,
@@ -2280,18 +2338,21 @@ function wire() {
   if ($('#btnModalDownloadGuest')) $('#btnModalDownloadGuest').addEventListener('click', downloadGuestSetupZip);
   if ($('#btnSubmitPairCode')) $('#btnSubmitPairCode').addEventListener('click', submitGuestPairCode);
 
-  const selectCliBackend = async (backendId, fromDesktopName) => {
+  const selectCliBackend = async (backendId, fromDesktopName, preferredProvider) => {
     const backend = normalizeAgentBackend(backendId);
     $('#agentBackend').value = backend;
     $('#agentError').hidden = true;
-    renderGuestEnvCards(state.guestEnv);
     const deviceId = $('#agentDevice').value;
-    $('#agentProvider').disabled = (backend !== 'hermes' && backend !== 'dsh' && backend !== 'codex');
+    $('#agentProvider').disabled = !isMultiProviderBackend(backend);
     if (fromDesktopName) {
-      toast('已切换至 ' + agentBackendLabel(backend) + '（后台无头静默复用 ' + fromDesktopName + ' 订阅，不影响客机使用）', 'info', 3200);
+      toast('已切换至 ' + agentBackendLabel(backend) + '（后台无头静默调用 ' + fromDesktopName + '，不影响客机使用）', 'info', 3200);
     }
+    renderGuestEnvCards(state.guestEnv);
     if (deviceId) {
-      try { await loadAgentModels(deviceId, backend, '', '', false); } catch { }
+      try {
+        await loadAgentModels(deviceId, backend, preferredProvider || '', '', false);
+        renderGuestEnvCards(state.guestEnv);
+      } catch { }
     }
   };
 
@@ -2300,10 +2361,11 @@ function wire() {
       const card = ev.target.closest('[data-desktop-id]');
       if (!card) return;
       const mapped = card.dataset.mappedCli;
+      const prefProv = card.dataset.preferredProvider || '';
       const titleEl = card.querySelector('.ge-top b');
       const dName = titleEl ? titleEl.textContent : card.dataset.desktopId;
       if (mapped) {
-        selectCliBackend(mapped, dName);
+        selectCliBackend(mapped, dName, prefProv);
       }
     });
   }
@@ -2312,7 +2374,7 @@ function wire() {
     $('#guestCliCards').addEventListener('click', ev => {
       const card = ev.target.closest('[data-cli-id]');
       if (!card) return;
-      selectCliBackend(card.dataset.cliId, '');
+      selectCliBackend(card.dataset.cliId, '', '');
     });
   }
 
@@ -2332,10 +2394,11 @@ function wire() {
     const backend = normalizeAgentBackend($('#agentBackend').value);
     $('#agentError').hidden = true;
     renderGuestEnvCards(state.guestEnv);
-    $('#agentProvider').disabled = (backend !== 'hermes' && backend !== 'dsh' && backend !== 'codex');
+    $('#agentProvider').disabled = !isMultiProviderBackend(backend);
     if (!deviceId) return;
     try {
       await loadAgentModels(deviceId, backend, '', '', false);
+      renderGuestEnvCards(state.guestEnv);
     } catch (error) {
       $('#agentError').hidden = false;
       $('#agentError').textContent = error.message;
@@ -2351,7 +2414,16 @@ function wire() {
       btn.disabled = true;
       btn.textContent = '刷新中…';
       try {
+        const credentials = agentCredentialPayload();
+        if (hasAnyAgentCredentialInput(credentials)) {
+          const saved = await post('/api/agent/credentials', Object.assign({ deviceId }, credentials));
+          setCredState('claude', saved.credentials && saved.credentials.claude);
+          setCredState('agy', saved.credentials && saved.credentials.agy);
+          setCredState('workbuddy', saved.credentials && saved.credentials.workbuddy);
+          setCredState('qoder', saved.credentials && saved.credentials.qoder);
+        }
         await loadAgentModels(deviceId, backend, $('#agentProvider').value, '', true);
+        renderGuestEnvCards(state.guestEnv);
         toast('已重新从客机拉取最新账号与模型列表', 'ok');
       } catch (error) {
         toast(error.message, 'error');
@@ -2371,6 +2443,7 @@ function wire() {
   $('#agentProvider').addEventListener('change', () => {
     const models = state.agentModels && state.agentModels.data;
     if (models) { fillAgentModels(models, $('#agentProvider').value, ''); }
+    renderGuestEnvCards(state.guestEnv);
   });
 
   $('#chkAuto').addEventListener('change', event => {

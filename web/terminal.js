@@ -304,11 +304,19 @@
       ? '上次连接 ' + esc(relativeTime(device.lastConnectedAt))
       : (device.lastError ? esc(device.lastError) : (isAdmin ? '管理员多端自动互联通道已就绪' : '尚未连接'));
     const env = device.guestEnv && typeof device.guestEnv === 'object' ? device.guestEnv : null;
+    const formatEnvItemName = item => {
+      const base = String((item && item.name) || '').trim();
+      const ed = String((item && item.editionLabel) || '').trim();
+      if (!ed) return base;
+      if (/CN|国际版|Global/i.test(base)) return base;
+      const shortEd = ed.replace(/\s*\((CN|Global)\)/i, '');
+      return base + ' [' + shortEd + ']';
+    };
     const cliNames = env && Array.isArray(env.cli)
-      ? env.cli.filter(x => x && x.installed).map(x => x.name)
+      ? env.cli.filter(x => x && x.installed).map(formatEnvItemName)
       : [];
     const desktopNames = env && Array.isArray(env.desktop)
-      ? env.desktop.filter(x => x && x.installed).map(x => x.name)
+      ? env.desktop.filter(x => x && x.installed).map(formatEnvItemName)
       : [];
     const envHtml = env
       ? '<div class="device-env-box">' +
