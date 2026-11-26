@@ -1,6 +1,6 @@
 {
   "name": "@sandrobina/client-desktop",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "author": "sandrobina99-cpu",
   "description": "smac 客户端 — 主机定向握手接入、个人 API 额度、AI 对话测试与 CLI 一键配置",
@@ -57,6 +57,9 @@
       ],
       "category": "public.app-category.developer-tools",
       "identity": null,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "smac 客户端需要访问本地网络以检测本机局域网与 ZeroTier 地址并与管理员主机建立连接。"
+      },
       "artifactName": "sandrobina-client-${version}-mac-${arch}.${ext}"
     },
     "win": {

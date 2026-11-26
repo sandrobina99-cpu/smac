@@ -160,11 +160,24 @@ function localDevices() {
 
 function syncGuestDevicesFromList(gwDevices) {
   const list = Array.isArray(gwDevices) ? gwDevices : [];
+  const localId = adminMesh.getLocalAdminNodeId();
   const local = localDevices();
   const seenGatewayIds = new Set();
 
   for (const gd of list) {
     if (!gd || !gd.id) continue;
+    const probeObj = {
+      gatewayDeviceId: gd.id,
+      host: gd.primaryIp || '',
+      fallbackHost: gd.fallbackIp || '',
+      zerotierIp: gd.zerotierIp || '',
+      port: gd.sshPort || 22,
+      user: gd.sshUser || ''
+    };
+    // Never import this local machine itself or duplicate an existing Admin Node peer!
+    if (remote.isSelfDevice(probeObj, localId)) continue;
+    if (local.some(ld => ld.isAdminNode && remote.devicesMatchSameMachine(ld, probeObj))) continue;
+
     seenGatewayIds.add(gd.id);
     const topo = {
       accountId: gd.userId,
@@ -176,13 +189,18 @@ function syncGuestDevicesFromList(gwDevices) {
       hostAdminNodeId: gd.hostAdminNodeId || '',
       hostAdminName: gd.hostAdminName || '',
       handshakeStatus: gd.handshakeStatus || 'connected',
-      pendingCommand: gd.pendingCommand || null
+      pendingCommand: gd.pendingCommand || null,
+      primaryIp: gd.primaryIp || '',
+      fallbackIp: gd.fallbackIp || '',
+      zerotierIp: gd.zerotierIp || '',
+      sshUser: gd.sshUser || '',
+      sshPort: gd.sshPort || 22,
+      os: gd.os || ''
     };
     const match = local.find(ld =>
       !ld.isAdminNode && (
         ld.gatewayDeviceId === gd.id
-        || (gd.primaryIp && (ld.host === gd.primaryIp || ld.fallbackHost === gd.primaryIp))
-        || (gd.zerotierIp && ld.zerotierIp === gd.zerotierIp)
+        || remote.devicesMatchSameMachine(ld, probeObj)
         || (gd.deviceName && String(ld.name || '').toLowerCase() === String(gd.deviceName).toLowerCase())
       )
     );
@@ -206,6 +224,7 @@ function syncGuestDevicesFromList(gwDevices) {
       } catch { }
     }
   }
+  try { remote.dedupeAndPruneDevices(localId, adminMesh.getKeyPath()); } catch { }
 
   // 网关里已被管理员删除的客机：仅解除本地的账号 / 直连标注，保留用户手动添加的设备记录
   for (const ld of local) {

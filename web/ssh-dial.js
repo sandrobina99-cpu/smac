@@ -370,12 +370,16 @@ async function connect(device, opts) {
   }
 
   // 1. Try direct hosts in strict LAN -> Tailscale -> ZeroTier order
+  const routeErrors = [];
   for (let i = 0; i < hosts.length; i += 1) {
     const host = hosts[i];
     const info = metaByHost.get(host) || { kind: 'direct', label: '直连' };
     const hasMore = (i < hosts.length - 1) || (Boolean(jumpDevice) && !triedJumpFirst);
     if (onStatus) onStatus(host + ' (' + info.label + ')', i > 0);
-    const attemptTimeout = hasMore ? Math.min(2800, connectTimeoutMs) : connectTimeoutMs;
+    // Give WAN/relay paths (Tailscale DERP / ZeroTier / public) enough time for SSH handshake
+    // while keeping unreachable LAN probes snappy.
+    const perRouteCap = info.kind === 'lan' ? 3200 : 9500;
+    const attemptTimeout = hasMore ? Math.min(perRouteCap, connectTimeoutMs) : connectTimeoutMs;
     try {
       const res = await connectSingle(device, { host, port: device.port || 22 }, {
         credentials,
@@ -389,6 +393,7 @@ async function connect(device, opts) {
       return res;
     } catch (error) {
       lastError = error;
+      routeErrors.push(info.label + ' ' + host + ': ' + (error && error.message ? error.message : String(error)));
       if (!isNetworkError(error)) {
         throw error;
       }
@@ -400,10 +405,21 @@ async function connect(device, opts) {
     try {
       return await tryJump(hosts);
     } catch (jumpErr) {
+      routeErrors.push('跳板 ' + (jumpDevice.name || jumpDevice.host) + ': ' + (jumpErr && jumpErr.message ? jumpErr.message : String(jumpErr)));
       if (jumpErr && !isNetworkError(jumpErr) && jumpErr.code !== 'password-missing') {
         lastError = jumpErr;
       }
     }
+  }
+
+  if (routeErrors.length > 1) {
+    const macLocalNetBlocked = process.platform === 'darwin'
+      && routeErrors.some(msg => /EHOSTUNREACH|EPERM|No route to host/i.test(msg));
+    const summary = '所有通道均连接失败（' + routeErrors.join('；') + '）'
+      + (macLocalNetBlocked ? '。提示：macOS 如拦截了本地网络，请在「系统设置 → 隐私与安全性 → 本地网络」中允许 smac 管理端' : '');
+    const err = new Error(summary);
+    err.code = (lastError && lastError.code) || 'unreachable';
+    throw err;
   }
 
   throw lastError || new Error('连接失败');

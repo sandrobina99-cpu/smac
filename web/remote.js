@@ -212,6 +212,270 @@ function setDeviceAccountBinding(id, binding) {
   return publicDevice(target);
 }
 
+let localIdentityCache = { at: 0, data: null };
+
+function getLocalMachineIdentity() {
+  if (localIdentityCache.data && Date.now() - localIdentityCache.at < 15000) {
+    return localIdentityCache.data;
+  }
+  const ips = new Set();
+  try {
+    const ifaces = os.networkInterfaces() || {};
+    for (const list of Object.values(ifaces)) {
+      for (const item of (list || [])) {
+        if (!item || item.internal || item.family !== 'IPv4') continue;
+        const ip = String(item.address || '').trim();
+        if (!ip || ip.startsWith('127.') || ip.startsWith('169.254.') || ip.startsWith('198.18.') || ip.startsWith('198.19.')) continue;
+        ips.add(ip);
+      }
+    }
+  } catch { }
+  let localAdminNodeId = '';
+  try { localAdminNodeId = fs.readFileSync(path.join(DATA_DIR, 'admin-node-id'), 'utf8').trim(); } catch { }
+  let localGuestDeviceId = '';
+  try { localGuestDeviceId = fs.readFileSync(path.join(USER_HOME, '.smac-guest', 'device-id'), 'utf8').trim(); } catch { }
+  const hostname = String(os.hostname() || '').replace(/\.local$/i, '').toLowerCase();
+  const data = { ips, hostname, localAdminNodeId, localGuestDeviceId };
+  localIdentityCache = { at: Date.now(), data };
+  return data;
+}
+
+function ipSetOf(dev) {
+  const out = [];
+  if (!dev) return out;
+  for (const h of [dev.host, dev.fallbackHost, dev.zerotierIp, dev.primaryIp, dev.fallbackIp]) {
+    const clean = String(h || '').trim().toLowerCase();
+    if (clean && !out.includes(clean)) out.push(clean);
+  }
+  return out;
+}
+
+function isSelfDevice(dev, localAdminNodeId) {
+  if (!dev) return false;
+  const me = getLocalMachineIdentity();
+  const myNodeId = localAdminNodeId || me.localAdminNodeId;
+  if (myNodeId && dev.adminNodeId && dev.adminNodeId === myNodeId) return true;
+  if (myNodeId && dev.id && dev.id === myNodeId) return true;
+  if (me.localGuestDeviceId && dev.gatewayDeviceId && dev.gatewayDeviceId === me.localGuestDeviceId) return true;
+  const ips = ipSetOf(dev);
+  if (ips.length && ips.some(ip => me.ips.has(ip))) return true;
+  return false;
+}
+
+function devicesMatchSameMachine(a, b) {
+  if (!a || !b) return false;
+  if (a.id && b.id && a.id === b.id) return true;
+  if (a.adminNodeId && b.adminNodeId && a.adminNodeId === b.adminNodeId) return true;
+  if (a.gatewayDeviceId && b.gatewayDeviceId && a.gatewayDeviceId === b.gatewayDeviceId) return true;
+  const portA = Number(a.port || a.sshPort) || 22;
+  const portB = Number(b.port || b.sshPort) || 22;
+  if (portA !== portB) return false;
+  const userA = String(a.user || a.sshUser || '').trim().toLowerCase();
+  const userB = String(b.user || b.sshUser || '').trim().toLowerCase();
+  if (userA && userB && userA !== userB) return false;
+  const ipsA = ipSetOf(a);
+  const ipsB = ipSetOf(b);
+  if (!ipsA.length || !ipsB.length) return false;
+  return ipsA.some(ip => ipsB.includes(ip));
+}
+
+function chooseMergedAddresses(a, b) {
+  const all = [];
+  for (const ip of [...ipSetOf(a), ...ipSetOf(b)]) {
+    if (ip && !all.includes(ip)) all.push(ip);
+  }
+  const isTs = ip => /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(ip);
+  const isLan = ip => /^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+  const explicitZt = String(b.zerotierIp || a.zerotierIp || '').trim();
+  const isZt = ip => (explicitZt && ip === explicitZt) || /^10\.(21|147|241|242|243|244)\./.test(ip);
+
+  const lan = all.find(isLan) || '';
+  const ts = all.find(isTs) || '';
+  const zt = explicitZt || all.find(isZt) || '';
+  const host = lan || String(a.host || b.host || ts || zt || all[0] || '').trim();
+  const fallbackHost = [ts, all.find(ip => ip !== host && ip !== zt), zt].find(ip => ip && ip !== host) || '';
+  return { host, fallbackHost, zerotierIp: zt };
+}
+
+function mergeDeviceRecords(primary, secondary, preferredAdminKey) {
+  const isAdmin = Boolean(primary.isAdminNode || secondary.isAdminNode);
+  const addrs = chooseMergedAddresses(primary, secondary);
+  const newerLastConn = String(primary.lastConnectedAt || '') >= String(secondary.lastConnectedAt || '')
+    ? (primary.lastConnectedAt || secondary.lastConnectedAt || '')
+    : (secondary.lastConnectedAt || '');
+  const keyCandidate = isAdmin && preferredAdminKey && fs.existsSync(preferredAdminKey)
+    ? preferredAdminKey
+    : (primary.keyPath || secondary.keyPath || '');
+  const hostChanged = addrs.host !== primary.host && addrs.host !== secondary.host;
+  return cleanDevice({
+    id: primary.id,
+    name: primary.name || secondary.name,
+    host: addrs.host || primary.host || secondary.host,
+    fallbackHost: addrs.fallbackHost === addrs.host ? '' : addrs.fallbackHost,
+    port: Number(primary.port || secondary.port) || 22,
+    user: primary.user || secondary.user,
+    auth: isAdmin ? 'key' : (primary.auth || secondary.auth || 'key'),
+    keyPath: keyCandidate,
+    password: isAdmin ? '' : (primary.password || secondary.password || ''),
+    hostFingerprint: hostChanged ? '' : (primary.hostFingerprint || secondary.hostFingerprint || ''),
+    os: primary.os || secondary.os || '',
+    jumpDeviceId: primary.jumpDeviceId || secondary.jumpDeviceId || '',
+    zerotierNodeId: primary.zerotierNodeId || secondary.zerotierNodeId || '',
+    zerotierIp: addrs.zerotierIp || primary.zerotierIp || secondary.zerotierIp || '',
+    zerotierStatus: primary.zerotierStatus || secondary.zerotierStatus || '',
+    zerotierNetworkId: primary.zerotierNetworkId || secondary.zerotierNetworkId || '',
+    accountId: isAdmin ? 0 : (primary.accountId || secondary.accountId || 0),
+    accountUsername: isAdmin ? '' : (primary.accountUsername || secondary.accountUsername || ''),
+    accountDisplayName: isAdmin ? '' : (primary.accountDisplayName || secondary.accountDisplayName || ''),
+    accountEnabled: isAdmin ? true : (primary.accountEnabled !== false && secondary.accountEnabled !== false),
+    gatewayDeviceId: isAdmin ? '' : (primary.gatewayDeviceId || secondary.gatewayDeviceId || ''),
+    isAdminNode: isAdmin,
+    adminNodeId: primary.adminNodeId || secondary.adminNodeId || '',
+    hostAdminNodeId: isAdmin ? '' : (primary.hostAdminNodeId || secondary.hostAdminNodeId || ''),
+    hostAdminName: isAdmin ? '' : (primary.hostAdminName || secondary.hostAdminName || ''),
+    handshakeStatus: isAdmin ? 'connected' : (primary.handshakeStatus || secondary.handshakeStatus || 'connected'),
+    pendingCommand: isAdmin ? null : (primary.pendingCommand || secondary.pendingCommand || null),
+    guestDisconnected: isAdmin
+      ? Boolean(secondary.isAdminNode ? secondary.guestDisconnected : primary.guestDisconnected)
+      : Boolean(primary.guestDisconnected && secondary.guestDisconnected),
+    guestEnv: primary.guestEnv || secondary.guestEnv || null,
+    createdAt: primary.createdAt || secondary.createdAt || nowIso(),
+    updatedAt: nowIso(),
+    lastConnectedAt: newerLastConn,
+    lastError: primary.lastError || secondary.lastError || ''
+  });
+}
+
+function getConfigReferencedIds() {
+  const refIds = new Set();
+  const cfg = readJsonSafe(CONFIG_FILE);
+  if (!cfg) return refIds;
+  if (cfg.defaultDeviceId) refIds.add(String(cfg.defaultDeviceId));
+  for (const p of (Array.isArray(cfg.syncPairs) ? cfg.syncPairs : [])) {
+    if (p && p.deviceId) refIds.add(String(p.deviceId));
+    if (p && p.peerRemotes && typeof p.peerRemotes === 'object') {
+      for (const k of Object.keys(p.peerRemotes)) refIds.add(k);
+    }
+  }
+  return refIds;
+}
+
+function remapConfigDeviceIds(idMap, removedSelfIds) {
+  if ((!idMap || idMap.size === 0) && (!removedSelfIds || removedSelfIds.size === 0)) return false;
+  const cfg = readJsonSafe(CONFIG_FILE);
+  if (!cfg || typeof cfg !== 'object') return false;
+  let changed = false;
+  if (cfg.defaultDeviceId && idMap.has(cfg.defaultDeviceId)) {
+    cfg.defaultDeviceId = idMap.get(cfg.defaultDeviceId);
+    changed = true;
+  }
+  if (Array.isArray(cfg.syncPairs)) {
+    for (const p of cfg.syncPairs) {
+      if (!p) continue;
+      if (p.deviceId && idMap.has(p.deviceId)) {
+        p.deviceId = idMap.get(p.deviceId);
+        changed = true;
+      }
+      if (p.peerRemotes && typeof p.peerRemotes === 'object') {
+        for (const [oldId, newId] of idMap.entries()) {
+          if (p.peerRemotes[oldId]) {
+            if (!p.peerRemotes[newId]) p.peerRemotes[newId] = p.peerRemotes[oldId];
+            delete p.peerRemotes[oldId];
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+  if (Array.isArray(cfg.clipboardDeviceIds)) {
+    const nextClip = [];
+    for (const rawId of cfg.clipboardDeviceIds) {
+      if (removedSelfIds && removedSelfIds.has(rawId)) { changed = true; continue; }
+      const mapped = idMap.has(rawId) ? idMap.get(rawId) : rawId;
+      if (mapped !== rawId) changed = true;
+      if (mapped && !nextClip.includes(mapped)) nextClip.push(mapped);
+    }
+    if (changed || nextClip.length !== cfg.clipboardDeviceIds.length) {
+      cfg.clipboardDeviceIds = nextClip;
+      changed = true;
+    }
+  }
+  if (changed) {
+    try {
+      const tmp = CONFIG_FILE + '.tmp-' + crypto.randomBytes(2).toString('hex');
+      fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+      fs.renameSync(tmp, CONFIG_FILE);
+    } catch { }
+  }
+  return changed;
+}
+
+function dedupeAndPruneDevices(localAdminNodeId, preferredAdminKey) {
+  const devices = readDevices();
+  const refIds = getConfigReferencedIds();
+  const removedSelfIds = new Set();
+  const nonSelf = [];
+
+  for (const d of devices) {
+    if (isSelfDevice(d, localAdminNodeId)) {
+      removedSelfIds.add(d.id);
+      disconnectDeviceSessions(d.id);
+      continue;
+    }
+    nonSelf.push(d);
+  }
+
+  const clusters = [];
+  for (const d of nonSelf) {
+    const cluster = clusters.find(c => c.some(existing => devicesMatchSameMachine(existing, d)));
+    if (cluster) cluster.push(d);
+    else clusters.push([d]);
+  }
+
+  const scoreOf = d => {
+    let s = 0;
+    if (refIds.has(d.id)) s += 100;
+    if (d.guestEnv) s += 40;
+    if (d.hostFingerprint) s += 30;
+    if (!String(d.id || '').startsWith('adm-peer-')) s += 20;
+    if (d.isAdminNode) s += 10;
+    if (d.lastConnectedAt) s += 5;
+    return s;
+  };
+
+  const idMap = new Map();
+  const merged = [];
+  for (const cluster of clusters) {
+    if (cluster.length === 1) {
+      merged.push(cluster[0]);
+      continue;
+    }
+    cluster.sort((a, b) => scoreOf(b) - scoreOf(a));
+    let acc = cluster[0];
+    for (let i = 1; i < cluster.length; i += 1) {
+      const dup = cluster[i];
+      idMap.set(dup.id, acc.id);
+      disconnectDeviceSessions(dup.id);
+      acc = mergeDeviceRecords(acc, dup, preferredAdminKey);
+    }
+    merged.push(acc);
+  }
+
+  // Sort admin nodes before clients/remote devices
+  merged.sort((a, b) => (b.isAdminNode ? 1 : 0) - (a.isAdminNode ? 1 : 0));
+
+  const sigOf = list => JSON.stringify(list.map(d => [
+    d.id, d.name, d.host, d.fallbackHost, d.port, d.user, d.os, d.zerotierIp,
+    d.isAdminNode, d.adminNodeId, d.hostAdminNodeId, d.handshakeStatus, d.guestDisconnected, d.keyPath
+  ]));
+  const changed = removedSelfIds.size > 0 || idMap.size > 0 || sigOf(merged) !== sigOf(devices);
+  if (changed) {
+    writeDevices(merged);
+    remapConfigDeviceIds(idMap, removedSelfIds);
+  }
+  return { changed, removedSelfCount: removedSelfIds.size, mergedCount: idMap.size, devices: merged.map(publicDevice) };
+}
+
 function isDeviceDirectLocal(device, localAdminNodeId) {
   if (!device) return false;
   if (device.isAdminNode) return true;
@@ -220,26 +484,30 @@ function isDeviceDirectLocal(device, localAdminNodeId) {
 }
 
 function syncAdminPeers(localAdminNodeId, peers, keyPath) {
-  const devices = readDevices();
-  const nonAdmin = devices.filter(d => !d.isAdminNode);
-  const prevAdminByNodeId = new Map();
-  for (const d of devices) {
-    if (d.isAdminNode && d.adminNodeId) prevAdminByNodeId.set(d.adminNodeId, d);
-  }
-  const validPeers = (Array.isArray(peers) ? peers : []).filter(p =>
-    p && p.id && p.id !== localAdminNodeId && (p.primaryIp || p.fallbackIp || p.zerotierIp) && p.sshUser
-  );
   const resolvedKey = expandHome(keyPath) || guessKeyPath();
-  const nextAdminIds = new Set();
-  const nextAdmins = [];
+  dedupeAndPruneDevices(localAdminNodeId, resolvedKey);
+  const devices = readDevices();
+  const refIds = getConfigReferencedIds();
+
+  const validPeers = (Array.isArray(peers) ? peers : []).filter(p =>
+    p && p.id && p.id !== localAdminNodeId
+    && (p.primaryIp || p.fallbackIp || p.zerotierIp)
+    && p.sshUser
+    && !isSelfDevice({
+      adminNodeId: p.id,
+      host: p.primaryIp,
+      fallbackHost: p.fallbackIp,
+      zerotierIp: p.zerotierIp
+    }, localAdminNodeId)
+  );
+
+  const activePeerIds = new Set(validPeers.map(p => p.id));
 
   for (const peer of validPeers) {
-    nextAdminIds.add(peer.id);
-    const prev = prevAdminByNodeId.get(peer.id);
     const host = String(peer.primaryIp || peer.fallbackIp || peer.zerotierIp || '').trim();
     const fallbackHost = String(peer.fallbackIp && peer.fallbackIp !== host ? peer.fallbackIp : '').trim();
-    nextAdmins.push(cleanDevice({
-      id: prev ? prev.id : ('adm-peer-' + peer.id.replace(/[^a-zA-Z0-9_-]/g, '')),
+    const incoming = cleanDevice({
+      id: 'adm-peer-' + peer.id.replace(/[^a-zA-Z0-9_-]/g, ''),
       name: String(peer.nodeName || peer.hostname || host).trim().slice(0, 38),
       host,
       fallbackHost,
@@ -248,8 +516,8 @@ function syncAdminPeers(localAdminNodeId, peers, keyPath) {
       auth: 'key',
       keyPath: resolvedKey,
       password: '',
-      hostFingerprint: prev && prev.host === host && prev.port === (Number(peer.sshPort) || 22) ? prev.hostFingerprint : '',
-      os: String(peer.os || (prev && prev.os) || '').trim(),
+      hostFingerprint: '',
+      os: String(peer.os || '').trim(),
       zerotierNodeId: String(peer.zerotierNodeId || '').trim(),
       zerotierIp: String(peer.zerotierIp || '').trim(),
       zerotierNetworkId: String(peer.zerotierNetworkId || '').trim(),
@@ -260,29 +528,43 @@ function syncAdminPeers(localAdminNodeId, peers, keyPath) {
       handshakeStatus: 'connected',
       pendingCommand: null,
       guestDisconnected: peer.online === false,
-      guestEnv: prev ? prev.guestEnv : null,
-      createdAt: prev ? prev.createdAt : nowIso(),
+      createdAt: nowIso(),
       updatedAt: nowIso(),
-      lastConnectedAt: prev ? prev.lastConnectedAt : '',
+      lastConnectedAt: '',
       lastError: ''
-    }));
-  }
+    });
 
-  for (const [nodeId, prev] of prevAdminByNodeId.entries()) {
-    if (!nextAdminIds.has(nodeId)) {
-      disconnectDeviceSessions(prev.id);
+    const matchIdx = devices.findIndex(d => devicesMatchSameMachine(d, incoming));
+    if (matchIdx >= 0) {
+      // Promote/merge in-place so existing friendly name (e.g. Mac / win-hermes), ID, guestEnv & syncPairs stay intact!
+      const merged = mergeDeviceRecords(devices[matchIdx], incoming, resolvedKey);
+      merged.isAdminNode = true;
+      merged.adminNodeId = peer.id;
+      merged.guestDisconnected = peer.online === false;
+      devices[matchIdx] = merged;
+    } else {
+      devices.unshift(incoming);
     }
   }
 
-  const combined = [...nextAdmins, ...nonAdmin];
-  const sigOf = list => JSON.stringify(list.map(d => [
-    d.id, d.name, d.host, d.fallbackHost, d.port, d.user, d.os, d.zerotierIp,
-    d.isAdminNode, d.adminNodeId, d.guestDisconnected, d.keyPath
-  ]));
-  if (sigOf(combined) !== sigOf(devices)) {
-    writeDevices(combined);
+  // Demote or remove admin nodes no longer in active peers
+  const nextList = [];
+  for (const d of devices) {
+    if (d.isAdminNode && d.adminNodeId && !activePeerIds.has(d.adminNodeId)) {
+      if (String(d.id || '').startsWith('adm-peer-') && !refIds.has(d.id)) {
+        disconnectDeviceSessions(d.id);
+        continue;
+      }
+      d.isAdminNode = false;
+      d.adminNodeId = '';
+      d.updatedAt = nowIso();
+    }
+    nextList.push(d);
   }
-  return nextAdmins.map(publicDevice);
+
+  writeDevices(nextList);
+  const result = dedupeAndPruneDevices(localAdminNodeId, resolvedKey);
+  return result.devices.filter(d => d.isAdminNode);
 }
 
 function disconnectDeviceSessions(id) {
@@ -356,8 +638,13 @@ function validateDeviceInput(body, existing) {
     if (!stat || !stat.isFile()) throw badRequest('私钥文件不存在: ' + keyPath);
   }
 
-  const duplicates = readDevices().filter(item => item.id !== device.id && item.name.toLowerCase() === name.toLowerCase());
+  const existingList = readDevices();
+  const duplicates = existingList.filter(item => item.id !== device.id && item.name.toLowerCase() === name.toLowerCase());
   if (duplicates.length) throw badRequest('已有同名设备: ' + name);
+  const candidateCheck = { id: device.id, host, fallbackHost, zerotierIp, port, user };
+  if (isSelfDevice(candidateCheck)) throw badRequest('不能将本机 IP 添加为远程设备');
+  const sameMachine = existingList.find(item => item.id !== device.id && devicesMatchSameMachine(item, candidateCheck));
+  if (sameMachine) throw badRequest('已有指向同一台设备的记录「' + sameMachine.name + '」，请直接编辑该设备以免重复');
 
   const hostChanged = host !== device.host || port !== device.port;
 
@@ -840,6 +1127,9 @@ module.exports = {
   testDevice,
   setDeviceAccountBinding,
   isDeviceDirectLocal,
+  isSelfDevice,
+  devicesMatchSameMachine,
+  dedupeAndPruneDevices,
   syncAdminPeers,
   disconnectDeviceSessions,
   attachUpgrade

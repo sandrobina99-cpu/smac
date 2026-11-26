@@ -83,7 +83,7 @@
     let data = null;
     try { data = await response.json(); } catch { data = {}; }
     if (!response.ok) {
-      const error = new Error((data && (data.output || data.message)) || '请求失败 (' + response.status + ')');
+      const error = new Error((data && (data.error || data.output || data.message)) || '请求失败 (' + response.status + ')');
       error.payload = data;
       throw error;
     }

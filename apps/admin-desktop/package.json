@@ -1,6 +1,6 @@
 {
   "name": "@sandrobina/admin-desktop",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "author": "sandrobina99-cpu",
   "description": "smac 管理端 — 文件中枢、全局网络拓扑、远程 Agent 与 API 分发一体化控制台",
@@ -68,6 +68,9 @@
       ],
       "category": "public.app-category.developer-tools",
       "identity": null,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "smac 管理端需要访问本地网络以直连局域网与 ZeroTier 设备，实现文件同步、拖拽传桌面、SSH 终端与剪贴板同步。"
+      },
       "artifactName": "sandrobina-admin-${version}-mac-${arch}.${ext}"
     },
     "win": {

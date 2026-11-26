@@ -53,11 +53,23 @@ function normPath(p) {
 }
 
 function resolveActualLocalPath(rawRemotePath) {
-  const expanded = expandHome(rawRemotePath);
+  let expanded = expandHome(rawRemotePath);
   if (!expanded) return '';
+  if (process.platform === 'win32') {
+    expanded = path.normalize(expanded.replace(/\//g, '\\'));
+  } else {
+    expanded = expanded.replace(/\\/g, '/');
+  }
   try {
     if (fs.existsSync(expanded)) {
-      return fs.realpathSync(expanded);
+      return fs.realpathSync.native ? fs.realpathSync.native(expanded) : fs.realpathSync(expanded);
+    }
+    // On macOS/Windows case-insensitive FS, normalize parent directory casing (e.g. ~/documents -> ~/Documents)
+    const parent = path.dirname(expanded);
+    const base = path.basename(expanded);
+    if (parent && parent !== expanded && fs.existsSync(parent)) {
+      const realParent = fs.realpathSync.native ? fs.realpathSync.native(parent) : fs.realpathSync(parent);
+      return path.join(realParent, base);
     }
   } catch { }
   return expanded;
@@ -422,43 +434,57 @@ async function fetchRemoteSmacMetadata(device) {
 async function reflectFromDevice(deviceId) {
   const devices = readDevicesRaw();
   const device = devices.find(d => d && d.id === deviceId);
-  if (!device) return { matched: false, addedPairs: [], addedDevices: [] };
+  if (!device) return { matched: false, error: '设备不存在', addedPairs: [], updatedPairs: [], addedDevices: [] };
+  if (remote.isSelfDevice(device)) {
+    return { matched: false, error: '', addedPairs: [], updatedPairs: [], addedDevices: [] };
+  }
+  let localAdminNodeId = '';
+  try { localAdminNodeId = fs.readFileSync(path.join(DATA_DIR, 'admin-node-id'), 'utf8').trim(); } catch { }
+  if (!device.isAdminNode && ((device.hostAdminNodeId && localAdminNodeId && device.hostAdminNodeId !== localAdminNodeId) || device.handshakeStatus === 'pending' || device.handshakeStatus === 'rejected')) {
+    return { matched: false, error: '', addedPairs: [], updatedPairs: [], addedDevices: [] };
+  }
   if (device.auth === 'password' && !device.password) {
-    return { matched: false, addedPairs: [], addedDevices: [] };
+    return { matched: false, error: '未保存密码', addedPairs: [], updatedPairs: [], addedDevices: [] };
   }
 
   let meta;
   try {
     meta = await fetchRemoteSmacMetadata(device);
-  } catch {
-    return { matched: false, addedPairs: [], addedDevices: [] };
+  } catch (err) {
+    return { matched: false, error: err && err.message ? err.message : String(err), peerName: device.name, addedPairs: [], updatedPairs: [], addedDevices: [] };
   }
-  if (!meta || !meta.ok) return { matched: false, addedPairs: [], addedDevices: [] };
+  if (!meta || !meta.ok) return { matched: false, error: '对端未配置 smac 同步目录', peerName: device.name, addedPairs: [], updatedPairs: [], addedDevices: [] };
 
   const me = guestEnv.detectNetworkAndMachine();
+  let localZt = null;
+  try { localZt = zerotier.getLocalStatus(); } catch { }
   const myIps = new Set([
     ...(me.lanIps || []),
     ...(me.tailscaleIps || []),
+    ...(me.zerotierIps || []),
     ...(me.meshIps || []),
-    ...(me.publicIps || [])
+    ...(me.publicIps || []),
+    ...(localZt && localZt.ip ? [localZt.ip] : [])
   ].filter(Boolean));
   const myUser = String(me.user || '').toLowerCase();
   const myHost = String(me.hostname || '').toLowerCase().replace(/\.local$/, '');
 
-  const isTargetMe = (hostA, hostB, targetUser, targetName, remotePathOnTarget) => {
+  const isTargetMe = (hostA, hostB, hostC, targetUser, targetName, remotePathOnTarget) => {
     if (hostA && myIps.has(hostA)) return true;
     if (hostB && myIps.has(hostB)) return true;
+    if (hostC && myIps.has(hostC)) return true;
     const tName = String(targetName || '').toLowerCase().replace(/\.local$/, '');
     if (tName && myHost && tName === myHost) return true;
     if (targetUser && myUser && String(targetUser).toLowerCase() === myUser) {
       const expanded = expandHome(remotePathOnTarget);
-      if (expanded && fs.existsSync(expanded)) return true;
+      if (expanded && (fs.existsSync(expanded) || fs.existsSync(path.dirname(expanded)))) return true;
     }
     return false;
   };
 
   const cfg = readConfigRaw();
   const addedPairs = [];
+  const updatedPairs = [];
   const addedDevices = [];
   let configChanged = false;
   let devicesChanged = false;
@@ -506,11 +532,11 @@ async function reflectFromDevice(deviceId) {
     if (!p || !p.local || !p.remote) continue;
     let matchesMe = false;
     if (!p.deviceId) {
-      matchesMe = isTargetMe(meta.host, meta.lanHost, meta.defaultUser, '', p.remote);
+      matchesMe = isTargetMe(meta.host, meta.lanHost, '', meta.defaultUser, '', p.remote);
     } else {
       const targetDev = (meta.devices || []).find(d => d && d.id === p.deviceId);
       if (targetDev) {
-        matchesMe = isTargetMe(targetDev.host, targetDev.fallbackHost, targetDev.user, targetDev.name, p.remote);
+        matchesMe = isTargetMe(targetDev.host, targetDev.fallbackHost, targetDev.zerotierIp, targetDev.user, targetDev.name, p.remote);
       }
     }
     if (!matchesMe) continue;
@@ -531,6 +557,12 @@ async function reflectFromDevice(deviceId) {
       if (existingSameTarget.peerRemotes[device.id] !== myRemote) {
         existingSameTarget.peerRemotes[device.id] = myRemote;
         configChanged = true;
+        updatedPairs.push(existingSameTarget.name);
+      }
+      if (existingSameTarget.autoPaired && existingSameTarget.remote !== myRemote) {
+        existingSameTarget.remote = myRemote;
+        configChanged = true;
+        if (!updatedPairs.includes(existingSameTarget.name)) updatedPairs.push(existingSameTarget.name);
       }
       continue;
     }
@@ -560,11 +592,10 @@ async function reflectFromDevice(deviceId) {
     for (const remoteDev of (Array.isArray(meta.devices) ? meta.devices : [])) {
       if (!remoteDev || !remoteDev.host || !remoteDev.user) continue;
       // Skip self!
-      if (myIps.has(remoteDev.host) || (remoteDev.fallbackHost && myIps.has(remoteDev.fallbackHost))) continue;
+      if (myIps.has(remoteDev.host) || (remoteDev.fallbackHost && myIps.has(remoteDev.fallbackHost)) || (remoteDev.zerotierIp && myIps.has(remoteDev.zerotierIp)) || remote.isSelfDevice(remoteDev)) continue;
       if (remoteDev.auth !== 'key') continue;
       let localGuest = devices.find(d => d && (
-        d.host === remoteDev.host
-        || (remoteDev.fallbackHost && (d.host === remoteDev.fallbackHost || d.fallbackHost === remoteDev.fallbackHost))
+        remote.devicesMatchSameMachine(d, remoteDev)
         || (d.name && remoteDev.name && d.name.toLowerCase() === remoteDev.name.toLowerCase())
       ));
       if (!localGuest) {
@@ -649,9 +680,11 @@ async function reflectFromDevice(deviceId) {
 
   return {
     matched: true,
+    error: '',
     peerName: device.name,
     peerHostname: meta.hostname,
     addedPairs,
+    updatedPairs,
     addedDevices
   };
 }
@@ -751,27 +784,47 @@ async function discoverAllPairedPeers() {
   if (discoveryRunning) return Object.assign({ ok: true, running: true }, lastDiscovery);
   discoveryRunning = true;
   try {
+    let localAdminNodeId = '';
+    try { localAdminNodeId = fs.readFileSync(path.join(DATA_DIR, 'admin-node-id'), 'utf8').trim(); } catch { }
+    try { remote.dedupeAndPruneDevices(localAdminNodeId); } catch { }
     ensureCleanSyncPairs();
     const bootAdded = bootstrapLocalPeers();
-    const sshAdded = await discoverPairedPeersFromSshConfig();
-    const devices = readDevicesRaw().filter(d => d && d.id && (d.auth === 'key' || Boolean(d.password)));
+    const currentRaw = readDevicesRaw();
+    const sshAdded = currentRaw.length === 0 ? await discoverPairedPeersFromSshConfig() : { addedDevices: [], addedIds: [] };
+    const devices = readDevicesRaw().filter(d => {
+      if (!d || !d.id) return false;
+      if (remote.isSelfDevice(d, localAdminNodeId)) return false;
+      if (!d.isAdminNode && ((d.hostAdminNodeId && localAdminNodeId && d.hostAdminNodeId !== localAdminNodeId) || d.handshakeStatus === 'pending' || d.handshakeStatus === 'rejected')) return false;
+      return d.auth === 'key' || Boolean(d.password);
+    });
     const addedPairs = [];
+    const updatedPairs = [];
     const addedDevices = [...bootAdded, ...sshAdded.addedDevices];
+    const unreachable = [];
     let peersMatched = 0;
 
     for (const dev of devices) {
       const r = await reflectFromDevice(dev.id);
       if (r.matched) peersMatched += 1;
-      if (r.addedPairs.length) addedPairs.push(...r.addedPairs);
-      if (r.addedDevices.length) addedDevices.push(...r.addedDevices);
+      else if (r.error && r.error !== '对端未配置 smac 同步目录') {
+        unreachable.push({ id: dev.id, name: dev.name, error: r.error });
+      }
+      if (r.addedPairs && r.addedPairs.length) addedPairs.push(...r.addedPairs);
+      if (r.updatedPairs && r.updatedPairs.length) updatedPairs.push(...r.updatedPairs);
+      if (r.addedDevices && r.addedDevices.length) addedDevices.push(...r.addedDevices);
     }
+
+    try { remote.dedupeAndPruneDevices(localAdminNodeId); } catch { }
+    ensureCleanSyncPairs();
 
     lastDiscovery = {
       at: new Date().toISOString(),
       peersChecked: devices.length,
       peersMatched,
       addedPairs,
-      addedDevices
+      updatedPairs,
+      addedDevices,
+      unreachable
     };
     return Object.assign({ ok: true }, lastDiscovery);
   } finally {

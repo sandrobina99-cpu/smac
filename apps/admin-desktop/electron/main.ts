@@ -63,14 +63,17 @@ function resolveRuntimeServerScript(): string {
   throw new Error(`未找到内嵌控制台服务端脚本（已检查: ${candidates.join(', ')}）`);
 }
 
-async function probeLocalConsolePort(port: number): Promise<string | null> {
+async function probeLocalConsolePort(port: number, expectedPid?: number): Promise<string | null> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
       signal: AbortSignal.timeout(1200),
     });
     if (!res.ok) return null;
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; app?: string };
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; app?: string; pid?: number };
     if (data && data.ok && data.app === 'smac') {
+      if (expectedPid && Number(data.pid) !== expectedPid) {
+        return null;
+      }
       return `http://127.0.0.1:${port}/`;
     }
   } catch {
@@ -183,10 +186,11 @@ function ensureEmbeddedConsoleServer(): Promise<string> {
     });
 
     // Fallback health probe in case stdout buffering delays the banner
+    // Strictly match child.pid so we NEVER attach to an old legacy smac-host-app on 8788.
     const poller = setInterval(async () => {
       if (settled) return;
       for (let offset = 0; offset <= 8; offset += 1) {
-        const found = await probeLocalConsolePort(basePort + offset);
+        const found = await probeLocalConsolePort(basePort + offset, child.pid);
         if (found) {
           finishOk(found);
           return;

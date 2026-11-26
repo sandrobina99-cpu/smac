@@ -2108,13 +2108,23 @@ function wire() {
         await refreshState();
         if (window.SmacRemote) window.SmacRemote.loadDevices();
         const pCount = (res.addedPairs || []).length;
+        const uCount = (res.updatedPairs || []).length;
         const dCount = (res.addedDevices || []).length;
-        if (pCount || dCount) {
-          toast('已自动识别并导入 ' + pCount + ' 个同步目录' + (dCount ? '、' + dCount + ' 台已配对设备' : ''), 'ok', 5000);
+        const unreachable = Array.isArray(res.unreachable) ? res.unreachable : [];
+        if (pCount || uCount || dCount) {
+          const parts = [];
+          if (pCount) parts.push('新增 ' + pCount + ' 个同步目录');
+          if (uCount) parts.push('更新 ' + uCount + ' 个目录映射');
+          if (dCount) parts.push('发现 ' + dCount + ' 台设备');
+          toast('已自动识别并' + parts.join('、'), 'ok', 5000);
         } else if (res.peersMatched > 0) {
-          toast('已连接 ' + res.peersMatched + ' 台已配对主机，所有同步目录均已最新显示', 'info', 3500);
+          const extra = unreachable.length ? ('（' + unreachable.length + ' 台离线：' + unreachable.map(x => x.name).join('、') + '）') : '';
+          toast('已核对 ' + res.peersMatched + ' 台已配对主机，所有同步目录均已最新' + extra, 'info', 4000);
+        } else if (unreachable.length) {
+          const first = unreachable[0];
+          toast('连接对端主机失败（' + first.name + '）：' + first.error, 'warn', 7000);
         } else {
-          toast('未发现新的已配对目录；请确认目标主机已添加到「远程设备 · 客机」且 SSH 可达', 'info', 4000);
+          toast('未发现新的已配对目录；请确认目标主机已出现在「全局网络 · 设备」且 SSH 可达', 'info', 4500);
         }
       } catch (err) {
         toast(err.message, 'error');

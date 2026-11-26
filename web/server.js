@@ -291,9 +291,9 @@ async function getConnectivity(config, defaultDev) {
     || candidates.find(h => /^10\./.test(h) && h !== lanHost && h !== tailHost) || '';
 
   const [lan, tail, zt] = await Promise.all([
-    lanHost ? probeTcp(lanHost, port) : Promise.resolve({ ok: false, host: '', ms: 0 }),
-    tailHost ? probeTcp(tailHost, port) : Promise.resolve({ ok: false, host: '', ms: 0 }),
-    ztHost ? probeTcp(ztHost, port) : Promise.resolve({ ok: false, host: '', ms: 0 })
+    lanHost ? probeTcp(lanHost, port, 1800) : Promise.resolve({ ok: false, host: '', ms: 0 }),
+    tailHost ? probeTcp(tailHost, port, 3500) : Promise.resolve({ ok: false, host: '', ms: 0 }),
+    ztHost ? probeTcp(ztHost, port, 3500) : Promise.resolve({ ok: false, host: '', ms: 0 })
   ]);
   const data = { lan, tail, zt };
   connCache = { at: Date.now(), data };
@@ -1566,6 +1566,9 @@ server.on('listening', () => {
   } catch { }
   const url = 'http://' + BIND + ':' + PORT + '/';
   console.log('smac web console: ' + url);
+  try {
+    remote.dedupeAndPruneDevices(adminMesh.getLocalAdminNodeId(), adminMesh.getKeyPath());
+  } catch { }
   apiHubBridge.setChangeListener(() => {
     stateCache.clear();
     connCache.at = 0;
@@ -1574,10 +1577,9 @@ server.on('listening', () => {
   if (process.argv.includes('--open') && process.env.SMAC_ELECTRON_HOST !== '1') {
     openStandaloneWindow(url);
   }
-  // 仅当存在 bootstrap-peer.json 或已配置设备时才在启动时自动识别同步目录；
-  // 全新安装默认保持零 SSH 连接配置，不主动探测本机 ~/.ssh/config。
+  // 存在已配对设备时自动执行一次双向同步目录识别（不再探测无关 ~/.ssh/config）
   const existingDevs = (() => { try { return remote.listDevices(); } catch { return []; } })();
-  if (fs.existsSync(path.join(DATA_DIR, 'bootstrap-peer.json')) || (!IS_WIN && existingDevs.length > 0)) {
+  if (fs.existsSync(path.join(DATA_DIR, 'bootstrap-peer.json')) || existingDevs.length > 0) {
     setTimeout(() => {
       peerDiscovery.discoverAllPairedPeers().then(r => {
         if (r && (r.addedPairs.length || r.addedDevices.length)) {
