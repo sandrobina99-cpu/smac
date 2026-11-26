@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0f19">
+<title>smac guest · 客机端连接与环境控制台</title>
+<link rel="stylesheet" href="/guest.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5l3-3M8.6 16.4l-1.8 1.8a3.2 3.2 0 0 1-4.5-4.5l3-3a3.2 3.2 0 0 1 4.5 0M15.4 7.6l1.8-1.8a3.2 3.2 0 1 1 4.5 4.5l-3 3a3.2 3.2 0 0 1-4.5 0" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M18.84 12.25l1.72-1.71a3.2 3.2 0 0 0-4.53-4.53l-1.71 1.72M5.16 11.75l-1.72 1.71a3.2 3.2 0 0 0 4.53 4.53l1.71-1.72M8 2v3M2 8h3M16 19v3M19 16h3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="7" rx="2"/><rect x="4" y="13.5" width="16" height="7" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5" stroke-linecap="round"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M17.5 12v3M20.5 12v2.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9 16H3z" stroke-linejoin="round"/><path d="M12 9v4M12 16.5h.01" stroke-linecap="round"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="bg" aria-hidden="true">
+  <div class="blob blob-a"></div>
+  <div class="blob blob-b"></div>
+  <div class="blob blob-c"></div>
+  <div class="grain"></div>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo"><svg><use href="#i-server"/></svg></div>
+    <div class="brand-text">
+      <div class="brand-name">smac<span>guest</span></div>
+      <div class="brand-sub">客机端控制台 · 主动连接与断联 · 本地订阅环境</div>
+    </div>
+  </div>
+  <div class="top-chips">
+    <div class="chip" id="chipHostConn" data-state="off" title="与主机端的连接及 SSH 公钥授权状态">
+      <span class="dot"></span><span class="chip-label">主机连接</span><span class="chip-value" id="chipHostConnText">检测中</span>
+    </div>
+    <div class="chip" id="chipSsh" data-state="off" title="本机 OpenSSH 服务状态">
+      <span class="dot"></span><span class="chip-label">SSH</span><span class="chip-value" id="chipSshText">检测中</span>
+    </div>
+    <div class="chip" id="chipLan" data-state="off" title="优先级 1 · 本机局域网 IP">
+      <span class="dot"></span><span class="chip-label">局域网</span><span class="chip-value" id="chipLanText">—</span>
+    </div>
+    <div class="chip" id="chipTail" data-state="off" title="优先级 2 · 本机 Tailscale IP">
+      <span class="dot"></span><span class="chip-label">Tailscale</span><span class="chip-value" id="chipTailText">—</span>
+    </div>
+    <div class="chip" id="chipZt" data-state="off" title="优先级 3 · 本机 ZeroTier IP">
+      <span class="dot"></span><span class="chip-label">ZeroTier</span><span class="chip-value" id="chipZtText">—</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="zt-bar" id="ztBar">
+    <div class="zt-info">
+      <div class="zt-title-row">
+        <span class="zt-pill"><svg><use href="#i-link"/></svg>ZeroTier 外网穿透</span>
+        <span class="badge" id="ztBadge" data-state="off">检测中…</span>
+        <code class="zt-ip" id="ztIpText" hidden></code>
+        <span class="zt-node" id="ztNodeText" hidden></span>
+      </div>
+      <p class="zt-desc" id="ztDesc">与主机加入同一 16 位 ZeroTier 组号即可跨外网直连；也可直接使用局域网或 Tailscale。</p>
+    </div>
+    <div class="zt-controls">
+      <input class="input zt-input" id="ztNetworkInput" maxlength="16" spellcheck="false" autocomplete="off" placeholder="输入 16 位 ZeroTier 组号（可选）">
+      <button class="btn primary small" id="btnZtJoin" type="button">保存并入组</button>
+      <a class="btn ghost small" id="btnZtCentral" href="https://my.zerotier.com/" target="_blank" rel="noopener">ZeroTier 后台</a>
+    </div>
+  </section>
+
+  <div class="layout">
+    <section class="col-main">
+      <article class="panel hero-panel" id="connPanel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>主机端连接与授权管控</h2>
+            <p>由客机自主决定何时允许主机接入、何时彻底断联并吊销 SSH 免密授权</p>
+          </div>
+          <span class="badge" id="connBadge" data-state="off">检测中</span>
+        </div>
+
+        <div class="conn-hero-box" id="connHeroBox" data-state="off">
+          <div class="conn-status-main">
+            <div class="conn-indicator" id="connIndicator"></div>
+            <div>
+              <div class="conn-title" id="connTitle">正在检测连接状态…</div>
+              <div class="conn-sub" id="connSub">正在读取本机 SSH 授权与主机配对配置</div>
+            </div>
+          </div>
+          <div class="conn-meta-grid">
+            <div class="conn-meta-item">
+              <span>目标主机</span>
+              <b id="metaHostName">未设置</b>
+            </div>
+            <div class="conn-meta-item">
+              <span>SSH 免密公钥</span>
+              <b id="metaKeyState">检测中</b>
+            </div>
+            <div class="conn-meta-item">
+              <span>首选回连通道</span>
+              <code id="metaActiveEp">—</code>
+            </div>
+            <div class="conn-meta-item">
+              <span>最近状态时间</span>
+              <b id="metaLastTime">—</b>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-actions">
+          <button class="btn primary large" id="btnConnectHost" type="button">
+            <svg><use href="#i-link"/></svg>
+            <span>主动连接主机端</span>
+          </button>
+          <button class="btn danger large" id="btnDisconnectHost" type="button">
+            <svg><use href="#i-unlink"/></svg>
+            <span>主动断联主机端</span>
+          </button>
+          <button class="btn ghost" id="btnRefreshAll" type="button" title="重新扫描本机环境并同步状态">
+            <svg><use href="#i-sync"/></svg>
+            <span>刷新并同步环境</span>
+          </button>
+        </div>
+
+        <details class="compact-details" id="profileDetails">
+          <summary>
+            <span>主机连接参数配置（支持自定义局域网 / Tailscale / ZeroTier 主机地址或切换新主机）</span>
+            <svg><use href="#i-chevron-down"/></svg>
+          </summary>
+          <div class="details-body">
+            <div class="form-grid">
+              <label class="field">
+                <span>目标主机名称 <em>可选</em></span>
+                <input class="input" id="inputHostName" placeholder="例如 我的主机 / Office-Mac" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>配对令牌 (Pair Token)</span>
+                <input class="input" id="inputPairToken" placeholder="主机端配对令牌（安装包已自动内置）" autocomplete="off" spellcheck="false">
+              </label>
+            </div>
+            <label class="field">
+              <span>主机回连地址列表 <em>支持多个地址（逗号或换行分隔），自动按 局域网 → Tailscale → ZeroTier 顺序连接</em></span>
+              <input class="input" id="inputEndpoints" placeholder="例如 192.168.1.10:8797, 100.85.1.2:8797, 10.21.1.2:8797" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="field">
+              <span>主机端 SSH 免密公钥 <em>主动连接时写入 authorized_keys，主动断联时自动吊销移除</em></span>
+              <input class="input" id="inputPublicKey" placeholder="ssh-ed25519 AAAA... smac-guest" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="btn-row" style="margin-top:4px;">
+              <button class="btn ghost small" id="btnSaveProfile" type="button">仅保存配置</button>
+              <button class="btn primary small" id="btnSaveAndConnect" type="button"><svg><use href="#i-link"/></svg>保存配置并立即连接主机</button>
+            </div>
+          </div>
+        </details>
+      </article>
+
+      <article class="panel env-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>本机 CLI 与 Desktop 订阅环境</h2>
+            <p>连接主机后，主机可在后台零打扰无头复用以下已安装的 CLI 与桌面端订阅</p>
+          </div>
+          <button class="btn ghost small" id="btnRescanEnv" type="button"><svg><use href="#i-sync"/></svg>重新扫描</button>
+        </div>
+        <div class="env-sec-title">⚡ 无头 CLI 引擎</div>
+        <div class="env-grid" id="cliGrid"></div>
+        <div class="env-sec-title" style="margin-top:14px;">🖥 桌面端订阅源（自动无感桥接 CLI）</div>
+        <div class="env-grid" id="desktopGrid"></div>
+      </article>
+
+      <article class="panel log-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>客机活动日志</h2>
+            <p>记录每一次主动连接、主动断联、SSH 授权变更与环境同步</p>
+          </div>
+        </div>
+        <pre class="log" id="logView"></pre>
+      </article>
+    </section>
+
+    <aside class="col-side">
+      <article class="panel info-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>本机网络与 SSH 信息</h2>
+            <p>供主机端按 局域网 → Tailscale → ZeroTier 顺序连接</p>
+          </div>
+        </div>
+        <dl class="meta-list" id="machineMeta"></dl>
+      </article>
+
+      <article class="panel svc-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>当前后台会话状态</h2>
+            <p>主机端正在调用的无头服务</p>
+          </div>
+          <span class="badge" id="bgSvcBadge" data-state="off">空闲</span>
+        </div>
+        <div class="svc-status-box" id="bgSvcText">当前没有运行中的远程 Agent 或剪贴板桥接进程。</div>
+        <button class="btn ghost wide" id="btnStopBgServices" type="button" style="margin-top:10px;">
+          <svg><use href="#i-stop"/></svg>立即停止所有后台会话
+        </button>
+      </article>
+
+      <article class="panel code-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>本机配对码（备用接入）</h2>
+            <p>若跨网段未直连主机 8797 端口，可复制配对码到主机端粘贴接入</p>
+          </div>
+        </div>
+        <textarea class="code-box" id="pairingCodeBox" readonly rows="4" spellcheck="false"></textarea>
+        <button class="btn primary wide" id="btnCopyPairingCode" type="button" style="margin-top:10px;">
+          <svg><use href="#i-copy"/></svg>复制本机配对码
+        </button>
+      </article>
+    </aside>
+  </div>
+</main>
+
+<footer class="foot">
+  <span>smac guest · 客机本地控制台 <code id="footAddr">127.0.0.1</code></span>
+  <span id="footStamp"></span>
+</footer>
+
+<div class="toasts" id="toasts"></div>
+<script src="/guest.js"></script>
+</body>
+</html>

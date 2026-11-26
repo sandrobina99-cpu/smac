@@ -1,0 +1,45 @@
+# Dependencies & Build Artifacts
+node_modules/
+**/node_modules/
+dist/
+enable-ssh/
+
+# Compiled Native Binaries (rebuild via package-editions.ps1 / macos/build-mac-apps.sh)
+*.exe
+*.ico
+*.icns
+*.node
+*.dll
+*.dylib
+*.so
+macos/smac-mac-bin
+macos/dmg-bg.png
+
+# Runtime State, Logs & Sensitive Configs
+.smac/
+.smac-guest/
+.smac-agent/
+.ssh/
+*.log
+*.pid
+*.tmp
+*.bak
+host-pairing.json
+guest-pairing.json
+devices.json
+config.json
+agent-credentials.json
+bootstrap-peer.json
+sync-status.json
+clip-status.json
+clipboard-state.json
+clipboard-multi-state.json
+host-profile.json
+host-profile.seed.json
+pairing-code.txt
+smac-guest-setup.zip
+smac-ssh-setup.zip
+
+# OS Files
+.DS_Store
+Thumbs.db

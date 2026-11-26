@@ -1,0 +1,26 @@
+smac 客机端安装与连接说明
+====================================
+
+目标主机：__SMAC_HOST_NAME__
+内置 ZeroTier 内网穿透组号：__SMAC_ZEROTIER_DISPLAY__
+
+1. Windows 客机安装：
+   - 解压本压缩包到任意文件夹；
+   - 双击运行「一键安装客机端.cmd」（在弹出的管理员权限请求中点击「是」）；
+   - 脚本会自动完成：
+     1) 安装并开启 OpenSSH 服务、写入主机端免密公钥；
+     2) 若主机端已配置 ZeroTier 组号（__SMAC_ZEROTIER_NETWORK__），自动检测并静默安装 ZeroTier One 加入同组；
+     3) 扫描本机 CLI 环境（DeepSeek Harness / Hermes / Codex / Claude / Antigravity / OpenCode）和 Desktop 桌面端订阅；
+     4) 自动按 局域网 -> Tailscale -> ZeroTier 顺序回连主机端完成注册！
+   - 若组网为私有组且首次接入显示「待授权」，请在 __SMAC_ZEROTIER_CENTRAL_URL__ 勾选该客机节点 ID 的 Auth 授权即可实现外网直连。
+   - 若未能自动回连主机，复制窗口最后显示的「SMAC-GUEST://...」配对码，在主机端网页控制台点击「配对码接入客机」粘贴即可一键连接。
+
+2. macOS / Linux 客机安装：
+   - macOS：解压后直接双击「一键安装客机端(Mac).command」（如系统提示未验证开发者，请右键选择「打开」），脚本会自动检测并引导开启 macOS 远程登录 (SSH)、写入免密公钥、按需加入 ZeroTier 组、探测本地环境（无 Node.js 时自动启用内置 Python3 兜底）并自动回连主机！
+   - Linux：在终端执行 bash ./install-guest.sh 即可。
+
+3. 连接后在主机端可执行的操作：
+   - 由主机端确定与客机双向同步的文件夹；
+   - 由主机端一键发送文件或文件夹到客机桌面；
+   - 在主机端查看客机检测到的所有无头 CLI 环境与 Desktop 桌面端订阅源；
+   - 后台零打扰静默复用客机已安装的 CLI 与桌面端订阅，不在客机弹窗、不影响客机正常使用！

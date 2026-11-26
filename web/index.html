@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0f19">
+<title>smac · 文件中枢与远程终端</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/vendor/xterm.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 7l-3 3 3 3M1 10h14M20 17l3-3-3-3M23 14H9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z" stroke-linejoin="round"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5" stroke-linejoin="round"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M21.5 2.5L11 13M21.5 2.5l-6.8 19-3.7-8.5-8.5-3.7z" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mac" viewBox="0 0 24 24"><rect x="4" y="4.5" width="16" height="11" rx="2"/><path d="M2 19h20" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V5h5v2M6.5 7l1 13h9l1-13" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5H5V6h5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9 16H3z" stroke-linejoin="round"/><path d="M12 9v4M12 16.5h.01" stroke-linecap="round"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9.5l3.2 3L7 15.5M12.8 15.5H17" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="7" rx="2"/><rect x="4" y="13.5" width="16" height="7" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5" stroke-linecap="round"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M17.5 12v3M20.5 12v2.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5l3-3M8.6 16.4l-1.8 1.8a3.2 3.2 0 0 1-4.5-4.5l3-3a3.2 3.2 0 0 1 4.5 0M15.4 7.6l1.8-1.8a3.2 3.2 0 1 1 4.5 4.5l-3 3a3.2 3.2 0 0 1-4.5 0" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="bg" aria-hidden="true">
+  <div class="blob blob-a"></div>
+  <div class="blob blob-b"></div>
+  <div class="blob blob-c"></div>
+  <div class="grain"></div>
+</div>
+
+<div class="progress" id="progress" hidden><span></span></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo"><svg><use href="#i-swap"/></svg></div>
+    <div class="brand-text">
+      <div class="brand-name">smac<span>console</span></div>
+      <div class="brand-sub">文件同步 · 剪贴板 · 远程终端</div>
+    </div>
+  </div>
+  <nav class="view-switch" id="viewSwitch" aria-label="视图切换">
+    <button class="view-btn active" data-view="files"><svg><use href="#i-folder"/></svg><span class="view-label">文件中枢</span></button>
+    <button class="view-btn" data-view="remote"><svg><use href="#i-terminal"/></svg><span class="view-label">远程设备 · 客机</span><span class="nav-count" id="remoteCount" hidden>0</span></button>
+    <button class="view-btn" data-view="agent"><svg><use href="#i-server"/></svg><span class="view-label">远程 Agent</span><span class="nav-count" id="agentCount" hidden>0</span></button>
+  </nav>
+  <div class="top-chips">
+    <button class="chip chip-action" id="btnTopGuestModal" type="button" title="生成客机端安装包或通过配对码接入客机">
+      <svg><use href="#i-link"/></svg><span class="chip-value">客机端安装 / 接入</span>
+    </button>
+    <div class="chip" id="chipLan" data-state="idle" title="优先级 1 · 局域网直连">
+      <span class="dot"></span><span class="chip-label">局域网</span><span class="chip-value" id="lanValue">检测中</span>
+    </div>
+    <div class="chip" id="chipTail" data-state="idle" title="优先级 2 · Tailscale 通道">
+      <span class="dot"></span><span class="chip-label">Tailscale</span><span class="chip-value" id="tailValue">检测中</span>
+    </div>
+    <div class="chip" id="chipZt" data-state="idle" title="优先级 3 · ZeroTier 内网穿透通道">
+      <span class="dot"></span><span class="chip-label">ZeroTier</span><span class="chip-value" id="ztValue">检测中</span>
+    </div>
+    <div class="chip daemon-chip" id="chipDaemon" data-state="off">
+      <span class="dot"></span><span class="chip-value" id="daemonChipText">守护未运行</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" id="dashView">
+  <section class="stats">
+    <article class="stat">
+      <div class="stat-icon tint-teal"><svg><use href="#i-folder"/></svg></div>
+      <div class="stat-body"><div class="stat-num" id="stPairs">0</div><div class="stat-label">同步文件夹</div></div>
+    </article>
+    <article class="stat">
+      <div class="stat-icon tint-blue"><svg><use href="#i-file"/></svg></div>
+      <div class="stat-body"><div class="stat-num" id="stTracked">0</div><div class="stat-label">已追踪文件</div></div>
+    </article>
+    <article class="stat">
+      <div class="stat-icon tint-violet"><svg><use href="#i-sync"/></svg></div>
+      <div class="stat-body"><div class="stat-num" id="stTraffic">0</div><div class="stat-label">最近一轮 上传 + 下载</div></div>
+    </article>
+    <article class="stat">
+      <div class="stat-icon tint-amber"><svg><use href="#i-alert"/></svg></div>
+      <div class="stat-body"><div class="stat-num" id="stConflicts">0</div><div class="stat-label">冲突 / 失败</div></div>
+    </article>
+  </section>
+
+  <div class="layout">
+    <section class="col-main">
+      <article class="panel pairs-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>同步文件夹</h2>
+            <p>任意一端修改，几秒内出现在另一端</p>
+          </div>
+          <div class="quick-bar">
+            <button class="btn ghost" id="btnDiscoverPeers" type="button" title="自动识别已配对主机并同步显示其共享的同步文件夹"><svg><use href="#i-link"/></svg>识别已配对目录</button>
+            <button class="btn primary" id="btnOpenAdd"><svg><use href="#i-plus"/></svg>添加文件夹</button>
+          </div>
+        </div>
+        <div class="pair-list" id="pairList"></div>
+        <div class="empty-state" id="pairEmpty">
+          <div class="empty-icon"><svg><use href="#i-folder"/></svg></div>
+          <h3>还没有同步文件夹</h3>
+          <p id="pairEmptyDesc">先在「远程设备 · 客机」添加一台设备（支持局域网 / Tailscale / ZeroTier），再选择要双向同步的文件夹。</p>
+          <button class="btn primary" id="btnEmptyAdd"><svg><use href="#i-plus"/></svg>添加第一个文件夹</button>
+        </div>
+      </article>
+
+      <article class="panel activity-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>活动日志</h2>
+            <p id="logHint">最近同步记录</p>
+          </div>
+          <div class="segmented" id="logTabs">
+            <button class="seg active" data-kind="sync">同步</button>
+            <button class="seg" data-kind="history">传输</button>
+            <button class="seg" data-kind="clip">剪贴板</button>
+          </div>
+        </div>
+        <pre class="log" id="logView"></pre>
+      </article>
+    </section>
+
+    <aside class="col-side">
+      <article class="panel transfer-panel" id="transferPanel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>快速传输到桌面</h2>
+            <p>拖入即发往 <span id="sendTargetName">远程设备</span> 的 <code id="remoteDirText">~/Desktop</code></p>
+          </div>
+          <select class="select device-select" id="sendDevice" aria-label="选择发送目标"></select>
+        </div>
+        <div class="send-drop-zone" id="sendDropZone" tabindex="0" role="region" aria-label="拖拽文件、图片、压缩包或文件夹到此处立即发送到对方桌面">
+          <div class="sdz-glow" aria-hidden="true"></div>
+          <div class="sdz-icons" aria-hidden="true">
+            <span class="sdz-ico sdz-ico-file" title="文档与各类文件"><svg><use href="#i-file"/></svg></span>
+            <span class="sdz-ico sdz-ico-main" title="拖拽即传"><svg><use href="#i-send"/></svg></span>
+            <span class="sdz-ico sdz-ico-folder" title="整个文件夹与压缩包"><svg><use href="#i-folder"/></svg></span>
+          </div>
+          <div class="sdz-title" id="sendDropTitle">拖拽任意文件或文件夹到此处，松手即传桌面</div>
+          <div class="sdz-types" id="sendDropTypes">
+            <span>文件</span>
+            <span>图片</span>
+            <span>压缩包</span>
+            <span>文件夹</span>
+          </div>
+          <div class="sdz-progress" id="sendDropProgress" hidden>
+            <div class="sdz-bar"><div class="sdz-bar-fill" id="sendDropBarFill"></div></div>
+            <div class="sdz-progress-text" id="sendDropProgressText">正在准备传输…</div>
+          </div>
+          <div class="sdz-sub" id="sendHint">支持单选或多选混拖，自动保持文件夹结构直达对方桌面</div>
+        </div>
+        <button class="link-btn" id="btnRemoteList"><svg><use href="#i-mac"/></svg><span id="remoteListLabel">查看远程设备接收目录</span></button>
+      </article>
+
+      <article class="panel service-panel">
+        <div class="panel-head">
+          <div class="panel-title"><h2>同步服务</h2></div>
+          <span class="badge" id="svcBadge" data-state="off">未运行</span>
+        </div>
+        <div class="service-actions">
+          <button class="btn primary wide" id="btnSyncAll"><svg><use href="#i-sync"/></svg>立即同步全部</button>
+          <div class="btn-row">
+            <button class="btn ghost" id="btnStart"><svg><use href="#i-play"/></svg>启动</button>
+            <button class="btn ghost" id="btnStop"><svg><use href="#i-stop"/></svg>停止</button>
+          </div>
+        </div>
+        <div class="rows">
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">开机自启</div>
+              <div class="row-sub">登录系统后自动开始同步</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="chkAuto"><span class="track"></span></label>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">同步间隔</div>
+              <div class="row-sub">每轮检查改动的时间</div>
+            </div>
+            <select class="select" id="selInterval">
+              <option value="5">5 秒</option>
+              <option value="10">10 秒</option>
+              <option value="20">20 秒</option>
+              <option value="30">30 秒</option>
+              <option value="60">1 分钟</option>
+              <option value="300">5 分钟</option>
+            </select>
+          </div>
+        </div>
+        <div class="next-run" id="nextRun"><span class="pulse"></span><span id="nextRunText">等待第一次同步</span></div>
+        <details class="compact-details sync-directory-panel">
+          <summary><span>默认同步根目录设置</span><svg><use href="#i-chevron-down"/></svg></summary>
+          <div class="details-body">
+            <label class="field">
+              <span id="syncRemoteDirLabel">默认远端同步根目录</span>
+              <div class="input-row">
+                <input class="input" id="syncRemoteDirInput" value="~/Documents" placeholder="~/Documents" aria-describedby="syncRemoteDirHint" spellcheck="false" autocomplete="off">
+                <button class="btn primary small" id="btnSaveSyncRemoteDir">保存</button>
+              </div>
+            </label>
+            <p class="hint" id="syncRemoteDirHint">支持 ~/Documents 或绝对路径。保存只影响新增同步，不搬动已有文件；快速传输仍使用独立接收目录。</p>
+          </div>
+        </details>
+      </article>
+
+      <article class="panel clip-panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>剪贴板同步</h2>
+            <p>本机与所选多台设备间双向同步文本与图片</p>
+          </div>
+          <span class="badge" id="clipBadge" data-state="off">未运行</span>
+        </div>
+        <div class="clip-devices-block">
+          <div class="clip-devices-head">
+            <span class="row-title">同步设备</span>
+            <span class="clip-devices-summary" id="clipDevicesSummary">本机 ⇄ 待选择</span>
+          </div>
+          <div class="clip-device-list" id="clipDeviceList"></div>
+        </div>
+        <div class="service-actions">
+          <button class="btn primary wide" id="btnClipNow"><svg><use href="#i-sync"/></svg>立即同步一次</button>
+          <div class="btn-row">
+            <button class="btn ghost" id="btnClipStart"><svg><use href="#i-play"/></svg>启动</button>
+            <button class="btn ghost" id="btnClipStop"><svg><use href="#i-stop"/></svg>停止</button>
+          </div>
+        </div>
+        <div class="rows">
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">开机自启</div>
+              <div class="row-sub">登录系统后自动启动</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="chkClipAuto"><span class="track"></span></label>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">检查间隔</div>
+              <div class="row-sub">复制后大约多久同步过去</div>
+            </div>
+            <select class="select" id="selClipInterval">
+              <option value="1">1 秒</option>
+              <option value="2">2 秒</option>
+              <option value="3">3 秒</option>
+              <option value="5">5 秒</option>
+              <option value="10">10 秒</option>
+            </select>
+          </div>
+        </div>
+        <div class="next-run" id="clipRun"><span class="pulse"></span><span id="clipRunText">未运行</span></div>
+      </article>
+    </aside>
+  </div>
+</main>
+
+<main class="wrap remote-wrap" id="remoteView" hidden>
+  <section class="remote-head">
+    <div>
+      <div class="remote-eyebrow">GUEST &amp; SSH WORKSPACE</div>
+      <h1>远程设备与客机</h1>
+      <p>导出客机端安装包发给另一台电脑，安装后自动与本机连接并上报 CLI 与 Desktop 环境；由本机统一确定同步目录、发送文件到客机桌面或打开完整终端。</p>
+    </div>
+    <div class="remote-head-actions">
+      <button class="btn ghost" id="btnDownloadGuestPkg" type="button"><svg><use href="#i-file"/></svg>下载客机端安装包</button>
+      <button class="btn ghost" id="btnOpenGuestModal" type="button"><svg><use href="#i-link"/></svg>配对码接入客机</button>
+      <button class="btn ghost" id="btnRefreshDevices"><svg><use href="#i-sync"/></svg>刷新</button>
+      <button class="btn primary" id="btnAddDevice"><svg><use href="#i-plus"/></svg>添加设备</button>
+    </div>
+  </section>
+
+  <div class="remote-unavailable" id="remoteUnavailable" hidden>
+    <svg><use href="#i-alert"/></svg>
+    <div>
+      <strong>远程终端组件未安装</strong>
+      <p>在安装目录的 <code>web</code> 文件夹执行 <code>npm install</code>，然后重新打开控制台。</p>
+    </div>
+  </div>
+
+  <section class="zt-bar" id="ztBar" aria-label="ZeroTier 内网穿透组网">
+    <div class="zt-info">
+      <div class="zt-title-row">
+        <span class="zt-pill"><svg><use href="#i-link"/></svg>ZeroTier 外网穿透</span>
+        <span class="badge" id="ztBadge" data-state="off">检测中…</span>
+        <code class="zt-ip" id="ztIpText" hidden></code>
+        <span class="zt-node" id="ztNodeText" hidden></span>
+      </div>
+      <p class="zt-desc" id="ztDesc">按需填入你自己的 16 位 ZeroTier 组号实现跨外网直连（可选）；配置后导出的客机端安装包会自动内置该组号。</p>
+    </div>
+    <div class="zt-controls">
+      <input class="input zt-input" id="ztNetworkInput" maxlength="16" spellcheck="false" autocomplete="off" placeholder="输入你的 16 位 ZeroTier 组号（可选）" value="">
+      <button class="btn primary small" id="btnZtJoin" type="button">保存并入组</button>
+      <button class="btn ghost small" id="btnZtRefresh" type="button">刷新</button>
+      <a class="btn ghost small" id="btnZtCentral" href="https://my.zerotier.com/" target="_blank" rel="noopener">ZeroTier 后台</a>
+      <a class="btn ghost small" id="btnZtDownload" href="https://www.zerotier.com/download/" target="_blank" rel="noopener" hidden>下载客户端</a>
+    </div>
+  </section>
+
+  <section class="device-grid" id="deviceGrid"></section>
+
+  <div class="empty-state remote-empty" id="deviceEmpty" hidden>
+    <div class="empty-icon"><svg><use href="#i-server"/></svg></div>
+    <h3>还没有远程设备</h3>
+    <p>添加服务器、云主机或另一台 Mac/Windows，保存后用浏览器一键连接。</p>
+    <button class="btn primary" id="btnEmptyAddDevice"><svg><use href="#i-plus"/></svg>添加第一台设备</button>
+  </div>
+
+  <section class="remote-tips">
+    <div class="tip">
+      <svg><use href="#i-shield"/></svg>
+      <div><b>主机指纹</b><p>首次连接成功后会记录服务器指纹；之后指纹变化会拒绝连接，需在编辑设备里手动重置。</p></div>
+    </div>
+    <div class="tip">
+      <svg><use href="#i-key"/></svg>
+      <div><b>凭据不落盘</b><p>密码与私钥口令只在连接时输入并保存在当前页面内存中，断开或刷新即丢弃。</p></div>
+    </div>
+    <div class="tip">
+      <svg><use href="#i-link"/></svg>
+      <div><b>仅本机可用</b><p>控制台只监听 127.0.0.1，终端通道同样只接受本机来源，不向局域网开放。</p></div>
+    </div>
+  </section>
+</main>
+
+<main class="wrap agent-wrap" id="agentView" hidden>
+  <section class="remote-head">
+    <div>
+      <div class="remote-eyebrow">HEADLESS AGENT &amp; SUBSCRIPTION BRIDGE</div>
+      <h1>远程 Agent · 客机无头 CLI 与订阅复用</h1>
+      <p>零打扰静默运行：不弹窗、不串流桌面、不影响客机正常使用。自动复用客机已登录的 CLI 与桌面端订阅（DeepSeek Harness / Codex / Hermes / Claude Code / Antigravity / OpenCode），在本机浏览器 0 延迟丝滑操作客机与主机同步的文件夹。</p>
+    </div>
+    <div class="remote-head-actions">
+      <button class="btn ghost" id="btnOpenInstallModal" type="button"><svg><use href="#i-plus"/></svg>安装 CLI / Desktop</button>
+      <button class="btn ghost" id="btnDetectEnv" type="button"><svg><use href="#i-sync"/></svg>检测客机环境</button>
+      <button class="btn ghost" id="btnAgentRefresh"><svg><use href="#i-sync"/></svg>刷新</button>
+      <button class="btn ghost" id="btnAgentStop" hidden><svg><use href="#i-stop"/></svg>停止隧道</button>
+      <button class="btn primary" id="btnAgentStart"><svg><use href="#i-play"/></svg>启动远程 Agent</button>
+    </div>
+  </section>
+
+  <div class="agent-grid">
+    <section class="panel agent-config">
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2>客机连接与工作目录</h2>
+          <p>由主机端指定客机允许操作的同步目录，并在下方选择客机端返回的无头 CLI / 桌面端订阅引擎</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>目标客机 / 设备</span>
+          <select class="input" id="agentDevice"></select>
+        </label>
+        <div class="field">
+          <span>快速操作</span>
+          <div class="quick-bar">
+            <button class="btn ghost small" id="btnAgentQuickAddPair" type="button"><svg><use href="#i-folder"/></svg>为该客机添加同步目录</button>
+            <button class="btn ghost small" id="btnAgentQuickSend" type="button"><svg><use href="#i-send"/></svg>发文件到客机桌面</button>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <span>允许操作的客机同步目录</span>
+        <div class="agent-pairs" id="agentPairs"></div>
+        <small class="hint">目录来自该客机的同步文件夹；Agent 只允许在这些客机同步目录内读写与检索文件，越界直接拒绝。</small>
+      </div>
+
+      <div class="field guest-env-section">
+        <div class="env-sec-head">
+          <span>⚡ 客机无头 CLI 与桌面端订阅引擎 <em id="cliEnvStatus">（后台静默运行 · 点击切换引擎）</em></span>
+        </div>
+        <div class="guest-env-grid cli-grid" id="guestCliCards"></div>
+      </div>
+
+      <div class="field guest-env-section">
+        <div class="env-sec-head">
+          <span>🖥 客机已安装的桌面端订阅源 <em id="desktopEnvStatus">（点击自动桥接对应无头 CLI，不启动客机 GUI 窗口）</em></span>
+        </div>
+        <div class="guest-env-grid" id="guestDesktopCards"></div>
+      </div>
+
+      <div class="form-grid">
+        <label class="field">
+          <span>无头 CLI 引擎</span>
+          <select class="input" id="agentBackend">
+            <option value="dsh">DeepSeek Harness（复用桌面端订阅）</option>
+            <option value="hermes">Hermes Agent</option>
+            <option value="codex">Codex CLI</option>
+            <option value="claude">Claude Code</option>
+            <option value="agy">Gemini · Antigravity</option>
+            <option value="opencode">OpenCode CLI</option>
+          </select>
+          <small class="hint">DeepSeek Harness 直接复用客机桌面端官方订阅与自定义模型；Codex 自动读取客机本地 <code>~/.codex</code> 与 Hermes 登录并标明账号等级（free / plus / pro）；Antigravity 自动读取客机登录态，换号后点右侧刷新即可同步。</small>
+        </label>
+        <label class="field">
+          <span>提供商 / 账号</span>
+          <select class="input" id="agentProvider">
+            <option value="">自动（远端登录）</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>模型</span>
+          <div class="input-row">
+            <select class="input" id="agentModel">
+              <option value="">默认模型</option>
+            </select>
+            <button class="btn ghost small" id="btnAgentRefreshModels" type="button" title="从客机重新同步登录账号与最新模型列表">刷新</button>
+          </div>
+          <small class="hint">实时读取客机当前登录账号可用的模型；客机切换免费/付费账号后点「刷新」立即更新。</small>
+        </label>
+      </div>
+      <div class="field">
+        <span>访问式绑定（可选）</span>
+        <div class="cred-grid">
+          <div class="cred-card">
+            <div class="cred-head">
+              <b>Claude Code</b>
+              <span id="agentClaudeState">未绑定</span>
+            </div>
+            <input class="input" id="agentClaudeKey" type="password" autocomplete="off"
+              placeholder="Anthropic API Key（留空用远端 claude 登录）">
+            <input class="input" id="agentClaudeToken" type="password" autocomplete="off"
+              placeholder="或 CLAUDE_CODE_OAUTH_TOKEN">
+            <input class="input" id="agentClaudeBase" type="text" autocomplete="off"
+              placeholder="自定义 ANTHROPIC_BASE_URL（可选）">
+            <button class="btn ghost cred-clear" type="button" data-cred-clear="claude">清除 Claude 绑定</button>
+          </div>
+          <div class="cred-card">
+            <div class="cred-head">
+              <b>Gemini · Antigravity</b>
+              <span id="agentAgyState">未绑定</span>
+            </div>
+            <input class="input" id="agentAgyKey" type="password" autocomplete="off"
+              placeholder="GEMINI_API_KEY（留空用远端 agy 登录）">
+            <input class="input" id="agentAgyBase" type="text" autocomplete="off"
+              placeholder="自定义 GOOGLE_GEMINI_BASE_URL（可选）">
+            <button class="btn ghost cred-clear" type="button" data-cred-clear="agy">清除 Gemini 绑定</button>
+          </div>
+        </div>
+        <small class="hint">密钥只保存在本机 ~/.smac/agent-credentials.json；启动时才通过 SSH 上传到远端 ~/.smac-agent/credentials.json（600 权限），不会回传到页面。留空表示继续使用远端已有登录。</small>
+      </div>
+      <div class="modal-error" id="agentError" hidden></div>
+    </section>
+
+    <aside class="col-side agent-side">
+      <article class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><h2>隧道状态</h2><p>仅监听 127.0.0.1</p></div>
+        </div>
+        <div class="agent-status" id="agentStatus">未启动</div>
+        <dl class="agent-meta" id="agentMeta"></dl>
+        <a class="btn primary agent-open" id="agentOpen" hidden target="_blank" rel="noopener">💬 打开 Agent 对话与文件工作台</a>
+      </article>
+      <article class="panel agent-notes">
+        <div class="panel-head">
+          <div class="panel-title"><h2>零打扰无头架构说明</h2></div>
+        </div>
+        <ul>
+          <li><b>完全不影响客机使用</b>：所有 CLI 与桌面端订阅均在客机 SSH 后台静默进程中运行，不弹出任何窗口、不抢占焦点、不占用客机显卡串流。</li>
+          <li><b>桌面端订阅无感桥接</b>：自动提取并复用客机 DeepSeek Harness Desktop、Codex / Hermes、Claude、Antigravity 的本地登录态与模型配置。</li>
+          <li><b>本机 0 延迟交互 + 同步目录沙箱</b>：本机原生网页流式对话与目录文件浏览，文件读写严格锁定在主机与客机同步的文件夹内。</li>
+        </ul>
+      </article>
+    </aside>
+  </div>
+</main>
+
+<div class="term-overlay" id="termOverlay" hidden>
+  <section class="term-window" aria-label="远程终端">
+    <header class="term-head">
+      <div class="term-tabs" id="termTabs" role="tablist"></div>
+      <div class="term-head-right">
+        <span class="term-status" id="termStatus"><span class="dot"></span><span id="termStatusText">未连接</span></span>
+        <button class="icon-btn" id="btnTermReconnect" title="重新连接当前会话"><svg><use href="#i-sync"/></svg></button>
+        <button class="icon-btn" id="btnTermMinimize" title="收起到后台（会话保持）"><svg><use href="#i-chevron-down"/></svg></button>
+        <button class="icon-btn icon-danger" id="btnTermCloseAll" title="断开全部并关闭"><svg><use href="#i-x"/></svg></button>
+      </div>
+    </header>
+    <div class="term-stage" id="termStage"></div>
+    <div class="term-prompt" id="termPrompt" hidden>
+      <div class="term-prompt-icon"><svg><use href="#i-key"/></svg></div>
+      <div class="term-prompt-body">
+        <div class="term-prompt-title" id="termPromptTitle">输入 SSH 密码</div>
+        <div class="term-prompt-sub" id="termPromptSub">仅用于本次连接，不会保存</div>
+      </div>
+      <input class="input" id="termSecret" type="password" autocomplete="off" spellcheck="false" placeholder="密码 / 口令">
+      <button class="btn primary small" id="btnTermSecretOk">继续</button>
+      <button class="btn ghost small" id="btnTermSecretCancel">取消</button>
+    </div>
+  </section>
+</div>
+
+<button class="term-dock" id="termDock" hidden title="返回终端">
+  <svg><use href="#i-terminal"/></svg><span id="termDockText">终端</span>
+</button>
+
+<footer class="foot">
+  <span>smac · 本机控制台 <code id="footAddr">127.0.0.1</code></span>
+  <span class="foot-right"><span class="job-indicator" id="jobIndicator" hidden><span class="spinner"></span><span id="jobText">同步中</span></span><span id="footStamp"></span></span>
+</footer>
+
+<div class="modal-backdrop" id="addModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addTitle">
+    <div class="modal-head">
+      <h3 id="addTitle">添加同步文件夹</h3>
+      <button class="icon-btn" data-close="addModal" title="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <label class="field">
+        <span>目标设备</span>
+        <select class="select" id="addDevice" aria-describedby="addDeviceHint"></select>
+        <small class="hint" id="addDeviceHint">选择已在「远程设备 · 客机」中添加的目标 SSH 设备。</small>
+      </label>
+      <label class="field">
+        <span>本机文件夹</span>
+        <div class="input-row">
+          <input class="input" id="addLocal" placeholder="D:\论文" spellcheck="false" autocomplete="off">
+          <button class="btn ghost small" id="btnBrowseLocal">选择…</button>
+        </div>
+      </label>
+      <label class="field">
+        <span id="addRemoteLabel">远端目标位置</span>
+        <input class="input" id="addRemote" placeholder="~/Documents/论文" aria-describedby="addRemoteHint" spellcheck="false" autocomplete="off">
+        <small class="hint" id="addRemoteHint">默认使用文稿目录，可手动指定本次同步位置。</small>
+      </label>
+      <div class="presets" id="remotePresets">
+        <button type="button" data-preset="default">使用默认目录</button>
+        <button type="button" data-preset="~/Desktop">桌面</button>
+        <button type="button" data-preset="~/Documents">文稿</button>
+        <button type="button" data-preset="~/Downloads">下载</button>
+        <button type="button" data-preset="same">与文件夹同名</button>
+      </div>
+      <label class="field">
+        <span>同步名称 <em>可选</em></span>
+        <input class="input" id="addName" placeholder="默认使用文件夹名" spellcheck="false" autocomplete="off">
+      </label>
+      <div class="notice">
+        <svg><use href="#i-shield"/></svg>
+        <p>双向同步：任何一端的新增、修改都会传到另一端。两端同时改同一文件会保留两份；删除的文件进入回收站。</p>
+      </div>
+      <div class="modal-error" id="addError" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="addModal">取消</button>
+      <button class="btn primary" id="btnAddSubmit">开始同步</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="confirmModal" hidden>
+  <div class="modal narrow" role="dialog" aria-modal="true">
+    <div class="modal-head"><h3 id="confirmTitle">确认操作</h3></div>
+    <div class="modal-body"><p class="confirm-text" id="confirmText"></p></div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="confirmCancel">取消</button>
+      <button class="btn danger" id="confirmOk">确认</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="listModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h3 id="remoteListTitle">远程设备接收目录</h3>
+      <button class="icon-btn" data-close="listModal" title="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <pre class="log modal-log" id="remoteListBody"></pre>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="modal-backdrop" id="guestModal" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="guestModalTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="guestModalTitle">客机端安装包与自动连接</h3>
+        <p class="modal-sub">将客机端发给另一台电脑安装，完成后自动连接本机并上报 CLI 与 Desktop 环境</p>
+      </div>
+      <button class="icon-btn" data-close="guestModal" title="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="notice">
+        <svg><use href="#i-shield"/></svg>
+        <p><b>第 1 步：导出客机端安装包</b><br>压缩包内已自动嵌入本机的专用 SSH 公钥与自动配对地址。把下载的 <code>smac-guest-setup.zip</code> 发给客机解压，Windows 双击 <b>「一键安装客机端.cmd」</b>、macOS 双击 <b>「一键安装客机端(Mac).command」</b> 即可自动开启 SSH、探测客机环境并回连本机。</p>
+      </div>
+      <div class="field">
+        <button class="btn primary wide" id="btnModalDownloadGuest" type="button"><svg><use href="#i-file"/></svg>生成并下载客机端安装包 (smac-guest-setup.zip)</button>
+      </div>
+      <div class="field">
+        <span>本机自动配对监听地址</span>
+        <div class="fingerprint-row" id="hostPairEndpointsBox">
+          <div>
+            <span>客机安装完成时会自动向以下地址发起握手注册：</span>
+            <code id="hostPairEndpoints">检测中…</code>
+          </div>
+        </div>
+      </div>
+      <label class="field">
+        <span>备用方式：粘贴客机配对码一键接入 <em>（跨网络 / 非局域网客机）</em></span>
+        <div class="input-row">
+          <input class="input" id="guestPairCodeInput" placeholder="粘贴客机窗口输出的 SMAC-GUEST://... 配对码" autocomplete="off" spellcheck="false">
+          <button class="btn primary small" id="btnSubmitPairCode" type="button">立即接入</button>
+        </div>
+        <input class="input" id="guestOverrideAddr" style="margin-top:8px" placeholder="可选：跨公网连接地址（如 Tailscale IP、ZeroTier IP 或 FRP 域名:端口，留空用配对码自带地址）" autocomplete="off" spellcheck="false">
+        <small class="hint">跨公网接入说明：如果你在「远程设备 · 客机」填写了自己的 16 位 ZeroTier 组号，导出的客机包会自动内置该组号并在客机入组；未填写时也可直接使用局域网、Tailscale 或手动添加 SSH 连接。</small>
+      </label>
+      <div class="modal-error" id="guestModalError" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="guestModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="installToolsModal" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="installToolsTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="installToolsTitle">远程给客机安装 CLI / Desktop</h3>
+        <p class="modal-sub" id="installToolsSub">使用官方默认安装目录静默安装，完成后自动重新检测客机环境并返回每项安装结果</p>
+      </div>
+      <button class="icon-btn" data-close="installToolsModal" title="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="install-sec-head">
+        <span>⚡ 命令行 CLI 工具（默认全局/官方目录）</span>
+        <button class="link-inline" id="btnSelectMissingCli" type="button">勾选未安装 CLI</button>
+      </div>
+      <div class="install-grid" id="installCliGrid"></div>
+
+      <div class="install-sec-head" style="margin-top:12px;">
+        <span>🖥 Desktop 桌面端（Windows winget / macOS brew 默认目录）</span>
+        <button class="link-inline" id="btnSelectMissingDesktop" type="button">勾选未安装 Desktop</button>
+      </div>
+      <div class="install-grid" id="installDesktopGrid"></div>
+
+      <div class="install-results" id="installResultsBox" hidden>
+        <div class="install-res-title" id="installResultsTitle">安装结果</div>
+        <div class="install-res-list" id="installResultsList"></div>
+      </div>
+      <div class="modal-error" id="installToolsError" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <span class="install-count" id="installSelectedCount">已选 0 项</span>
+      <button class="btn ghost" id="btnInstallReprobe" type="button">刷新客机环境</button>
+      <button class="btn ghost" data-close="installToolsModal" type="button">关闭</button>
+      <button class="btn primary" id="btnRunRemoteInstall" type="button">开始远程安装</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="deviceModal" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="deviceTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="deviceTitle">添加远程设备</h3>
+        <p class="modal-sub">支持局域网、Tailscale、ZeroTier 多路径自动优选连接（局域网 → Tailscale → ZeroTier）</p>
+      </div>
+      <button class="icon-btn" data-close="deviceModal" title="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="deviceId">
+      <div class="form-grid">
+        <label class="field">
+          <span>设备名称</span>
+          <input class="input" id="devName" placeholder="例如 办公室电脑 / Mac / 云服务器" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>主机地址 <em>局域网 / IP / 域名</em></span>
+          <input class="input" id="devHost" placeholder="192.168.1.20 或 example.com" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>Tailscale / 备用地址 <em>可选</em></span>
+          <input class="input" id="devFallback" placeholder="100.x.x.x 或其他备用 IP" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>ZeroTier IP <em>可选</em></span>
+          <input class="input" id="devZerotierIp" placeholder="10.x.x.x 或 ZeroTier 穿透 IP" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>端口</span>
+          <input class="input" id="devPort" type="number" min="1" max="65535" value="22">
+        </label>
+        <label class="field">
+          <span>用户名</span>
+          <input class="input" id="devUser" placeholder="例如 root / Admin / 用户名" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <div class="field">
+        <span>认证方式</span>
+        <div class="segmented auth-switch" id="authSwitch">
+          <button type="button" class="seg active" data-auth="key"><svg><use href="#i-key"/></svg>私钥</button>
+          <button type="button" class="seg" data-auth="password"><svg><use href="#i-shield"/></svg>密码</button>
+        </div>
+      </div>
+      <label class="field" id="keyField">
+        <span>私钥文件</span>
+        <div class="input-row">
+          <input class="input" id="devKeyPath" placeholder="C:\Users\你\.ssh\id_ed25519" autocomplete="off" spellcheck="false">
+          <button class="btn ghost small" type="button" id="btnPickKey">选择…</button>
+        </div>
+        <small class="hint">私钥只在本机读取；若私钥有口令，会在连接时询问。</small>
+      </label>
+      <div class="field" id="pwdField" hidden>
+        <span>登录密码</span>
+        <input class="input" id="devPassword" type="password" placeholder="输入登录密码" autocomplete="new-password">
+        <small class="hint" id="pwdStateHint">密码不会通过网页接口返回。</small>
+        <label class="check-row">
+          <input type="checkbox" id="devSavePassword" checked>
+          <span>保存密码（后台同步 / 发送用）</span>
+        </label>
+      </div>
+      <div class="notice" id="pwdNotice" hidden>
+        <svg><use href="#i-shield"/></svg>
+        <p>勾选保存后，密码会明文写入本机 <code>%USERPROFILE%\.smac\devices.json</code>，仅用于后台同步和发送；网页终端每次打开仍会单独询问密码。</p>
+      </div>
+      <div class="fingerprint-row" id="fingerprintRow" hidden>
+        <div>
+          <span>主机指纹</span>
+          <code id="fingerprintText"></code>
+        </div>
+        <button type="button" class="link-btn" id="btnResetFingerprint">重置指纹</button>
+      </div>
+      <div class="modal-error" id="deviceError" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="deviceModal">取消</button>
+      <button class="btn primary" id="btnSaveDevice">保存设备</button>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/terminal.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
